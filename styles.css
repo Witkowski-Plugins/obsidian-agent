@@ -184,8 +184,9 @@
 }
 
 .oc-message-assistant .oc-bubble {
-  background: var(--background-secondary);
+  background: var(--background-secondary-alt, var(--background-secondary));
   color: var(--text-normal);
+  border: 1px solid var(--background-modifier-border);
   border-bottom-left-radius: 4px;
 }
 
@@ -407,4 +408,100 @@
   font-size: 0.85em;
   border-radius: 6px;
   cursor: pointer;
+}
+
+/* ─── Include Note Toggle ─── */
+
+.oc-input-options {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0 6px;
+}
+
+.oc-include-note-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.78em;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.oc-include-note-label:hover {
+  color: var(--text-normal);
+}
+
+.oc-include-note-label input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+
+/* ─── Action Blocks ─── */
+
+.oc-actions-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.oc-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 0.78em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.oc-action-btn:hover {
+  background: var(--background-primary-alt);
+}
+
+.oc-action-btn.destructive {
+  border-color: var(--text-error);
+  color: var(--text-error);
+}
+
+.oc-action-btn.destructive:hover {
+  background: var(--background-modifier-error);
+}
+
+/* ─── Confirmation Modal ─── */
+
+.oc-confirm-modal .modal-content {
+  padding: 16px;
+}
+
+.oc-confirm-modal h3 {
+  margin: 0 0 12px;
+}
+
+.oc-confirm-modal p {
+  margin: 0 0 8px;
+  font-size: 0.9em;
+  color: var(--text-muted);
+}
+
+.oc-confirm-modal code {
+  display: block;
+  padding: 8px 10px;
+  background: var(--background-secondary);
+  border-radius: 6px;
+  font-size: 0.85em;
+  margin: 8px 0 16px;
+  word-break: break-all;
+}
+
+.oc-confirm-modal .modal-button-container {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }

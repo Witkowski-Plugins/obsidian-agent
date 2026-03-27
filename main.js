@@ -344,6 +344,7 @@ var ChatView = class extends import_obsidian.ItemView {
     this.sendBtn = null;
     this.statusEl = null;
     this.emptyStateEl = null;
+    this.includeNoteCheckbox = null;
     this.plugin = plugin;
   }
   getViewType() {
@@ -369,6 +370,10 @@ var ChatView = class extends import_obsidian.ItemView {
     this.messagesEl = this.chatAreaEl.createDiv({ cls: "oc-messages" });
     this.emptyStateEl = container.createDiv({ cls: "oc-empty-state" });
     const inputArea = this.chatAreaEl.createDiv({ cls: "oc-input-area" });
+    const inputOptions = inputArea.createDiv({ cls: "oc-input-options" });
+    const noteLabel = inputOptions.createEl("label", { cls: "oc-include-note-label" });
+    this.includeNoteCheckbox = noteLabel.createEl("input", { attr: { type: "checkbox" } });
+    noteLabel.createSpan({ text: "Include current note" });
     const inputRow = inputArea.createDiv({ cls: "oc-input-row" });
     this.inputEl = inputRow.createEl("textarea", {
       cls: "oc-input",
@@ -582,11 +587,15 @@ var ChatView = class extends import_obsidian.ItemView {
       return;
     state.isStreaming = false;
     if (state.streamBuffer) {
+      const { text, actions } = this.extractActions(state.streamBuffer);
       state.messages.push({
         role: "assistant",
-        content: state.streamBuffer,
+        content: text,
         timestamp: Date.now()
       });
+      if (actions.length > 0) {
+        this.executeActions(actions);
+      }
     }
     state.streamBuffer = "";
     state.streamMsgEl = null;
@@ -674,7 +683,7 @@ var ChatView = class extends import_obsidian.ItemView {
   }
   // ─── Input ───
   async handleSend() {
-    var _a, _b;
+    var _a, _b, _c;
     const text = (_b = (_a = this.inputEl) == null ? void 0 : _a.value) == null ? void 0 : _b.trim();
     if (!text || !this.activeAgentId)
       return;
@@ -691,14 +700,32 @@ var ChatView = class extends import_obsidian.ItemView {
       new import_obsidian.Notice("Gateway token not set. Open Settings to enter it.");
       return;
     }
+    let messageToSend = text;
+    let displayText = text;
+    if ((_c = this.includeNoteCheckbox) == null ? void 0 : _c.checked) {
+      const activeFile = this.app.workspace.getActiveFile();
+      if (!activeFile) {
+        new import_obsidian.Notice("No active note to include.");
+        return;
+      }
+      const noteContent = await this.app.vault.read(activeFile);
+      messageToSend = `[Current Note: ${activeFile.name}]
+${noteContent}
+
+---
+${text}`;
+      displayText = `\u{1F4CE} ${activeFile.basename}
+
+${text}`;
+    }
     const state = this.getAgentState(this.activeAgentId);
-    state.messages.push({ role: "user", content: text, timestamp: Date.now() });
+    state.messages.push({ role: "user", content: displayText, timestamp: Date.now() });
     this.renderMessages();
     if (this.inputEl)
       this.inputEl.value = "";
     this.setInputDisabled(true);
     try {
-      await client.sendChat(agent.sessionKey, text);
+      await client.sendChat(agent.sessionKey, messageToSend);
     } catch (e) {
       this.finishStream(this.activeAgentId);
       state.messages.push({
@@ -779,8 +806,192 @@ var ChatView = class extends import_obsidian.ItemView {
       });
     }
   }
+  // ─── Action blocks ───
+  extractActions(content) {
+    const regex = /```json:oc-actions\s*\n([\s\S]*?)```/g;
+    let actions = [];
+    const text = content.replace(regex, (_match, json) => {
+      try {
+        const parsed = JSON.parse(json.trim());
+        if (Array.isArray(parsed)) {
+          actions = actions.concat(parsed);
+        }
+      } catch (e) {
+        return _match;
+      }
+      return "";
+    }).trim();
+    return { text, actions };
+  }
+  async executeActions(actions) {
+    var _a, _b, _c;
+    const results = [];
+    for (const action of actions) {
+      try {
+        switch (action.action) {
+          case "openFile": {
+            const file = this.app.vault.getAbstractFileByPath(action.path);
+            if (file instanceof import_obsidian.TFile) {
+              await this.app.workspace.getLeaf(false).openFile(file);
+              results.push(`Opened ${action.path}`);
+            } else {
+              results.push(`File not found: ${action.path}`);
+            }
+            break;
+          }
+          case "createFile": {
+            const confirmed = await this.confirmAction(
+              "Create File",
+              `Create new note at:
+${action.path}`
+            );
+            if (!confirmed) {
+              results.push(`Skipped creating ${action.path}`);
+              break;
+            }
+            const dir = action.path.substring(0, action.path.lastIndexOf("/"));
+            if (dir) {
+              await this.ensureFolder(dir);
+            }
+            await this.app.vault.create(action.path, (_a = action.content) != null ? _a : "");
+            results.push(`Created ${action.path}`);
+            break;
+          }
+          case "updateFile": {
+            const confirmed = await this.confirmAction(
+              "Overwrite File",
+              `This will overwrite:
+${action.path}`
+            );
+            if (!confirmed) {
+              results.push(`Skipped updating ${action.path}`);
+              break;
+            }
+            const file = this.app.vault.getAbstractFileByPath(action.path);
+            if (file instanceof import_obsidian.TFile) {
+              await this.app.vault.modify(file, (_b = action.content) != null ? _b : "");
+              results.push(`Updated ${action.path}`);
+            } else {
+              results.push(`File not found: ${action.path}`);
+            }
+            break;
+          }
+          case "appendToFile": {
+            const confirmed = await this.confirmAction(
+              "Append to File",
+              `Append content to:
+${action.path}`
+            );
+            if (!confirmed) {
+              results.push(`Skipped appending to ${action.path}`);
+              break;
+            }
+            const file = this.app.vault.getAbstractFileByPath(action.path);
+            if (file instanceof import_obsidian.TFile) {
+              await this.app.vault.append(file, (_c = action.content) != null ? _c : "");
+              results.push(`Appended to ${action.path}`);
+            } else {
+              results.push(`File not found: ${action.path}`);
+            }
+            break;
+          }
+          case "deleteFile": {
+            const confirmed = await this.confirmAction(
+              "Delete File",
+              `Are you sure you want to delete:
+${action.path}
+
+This cannot be undone.`
+            );
+            if (!confirmed) {
+              results.push(`Skipped deleting ${action.path}`);
+              break;
+            }
+            const file = this.app.vault.getAbstractFileByPath(action.path);
+            if (file instanceof import_obsidian.TFile) {
+              await this.app.vault.delete(file);
+              results.push(`Deleted ${action.path}`);
+            } else {
+              results.push(`File not found: ${action.path}`);
+            }
+            break;
+          }
+          case "renameFile": {
+            const confirmed = await this.confirmAction(
+              "Rename File",
+              `Rename:
+${action.path}
+to:
+${action.newPath}`
+            );
+            if (!confirmed) {
+              results.push(`Skipped renaming ${action.path}`);
+              break;
+            }
+            const file = this.app.vault.getAbstractFileByPath(action.path);
+            if (file instanceof import_obsidian.TFile && action.newPath) {
+              await this.app.vault.rename(file, action.newPath);
+              results.push(`Renamed ${action.path} \u2192 ${action.newPath}`);
+            } else {
+              results.push(`File not found: ${action.path}`);
+            }
+            break;
+          }
+          default:
+            results.push(`Unknown action: ${action.action}`);
+        }
+      } catch (e) {
+        results.push(`Error: ${e.message}`);
+      }
+    }
+    if (results.length > 0) {
+      new import_obsidian.Notice(results.join("\n"), 8e3);
+    }
+  }
+  confirmAction(title, message) {
+    return new Promise((resolve) => {
+      const modal = new ConfirmModal(this.app, title, message, resolve);
+      modal.open();
+    });
+  }
+  async ensureFolder(path) {
+    const existing = this.app.vault.getAbstractFileByPath(path);
+    if (!existing) {
+      await this.app.vault.createFolder(path);
+    }
+  }
   async onClose() {
     this.unbindAllAgentListeners();
+  }
+};
+var ConfirmModal = class extends import_obsidian.Modal {
+  constructor(app, title, message, resolve) {
+    super(app);
+    this.title = title;
+    this.message = message;
+    this.resolve = resolve;
+  }
+  onOpen() {
+    this.containerEl.addClass("oc-confirm-modal");
+    const { contentEl } = this;
+    contentEl.createEl("h3", { text: this.title });
+    for (const line of this.message.split("\n")) {
+      contentEl.createEl("p", { text: line });
+    }
+    const btnContainer = contentEl.createDiv({ cls: "modal-button-container" });
+    const cancelBtn = btnContainer.createEl("button", { text: "Cancel" });
+    cancelBtn.addEventListener("click", () => {
+      this.resolve(false);
+      this.close();
+    });
+    const confirmBtn = btnContainer.createEl("button", { cls: "mod-cta", text: "Confirm" });
+    confirmBtn.addEventListener("click", () => {
+      this.resolve(true);
+      this.close();
+    });
+  }
+  onClose() {
+    this.contentEl.empty();
   }
 };
 
@@ -804,6 +1015,10 @@ var OcChatSettingTab = class extends import_obsidian2.PluginSettingTab {
     for (const agent of this.plugin.settings.agents) {
       this.renderAgentCard(agentList, agent);
     }
+    containerEl.createEl("h2", { text: "Integrations" });
+    new import_obsidian2.Setting(containerEl).setName("Note Sync").setDesc("Coming Soon \u2014 two-way note synchronisation with agents").addToggle(
+      (toggle) => toggle.setValue(false).setDisabled(true)
+    );
     new import_obsidian2.Setting(containerEl).addButton(
       (btn) => btn.setButtonText("+ Add Agent").setCta().onClick(async () => {
         const id = crypto.randomUUID();

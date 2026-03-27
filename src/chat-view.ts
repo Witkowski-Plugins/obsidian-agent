@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf, Notice, setIcon } from "obsidian";
+import { ItemView, WorkspaceLeaf, Notice, setIcon, Modal, TFile } from "obsidian";
 import type { ChatMessage, AgentConfig, ChatEventPayload } from "./types";
 import type { GatewayClient } from "./gateway";
 import type OcChatPlugin from "../main";
@@ -33,6 +33,7 @@ export class ChatView extends ItemView {
   private sendBtn: HTMLButtonElement | null = null;
   private statusEl: HTMLElement | null = null;
   private emptyStateEl: HTMLElement | null = null;
+  private includeNoteCheckbox: HTMLInputElement | null = null;
 
   constructor(leaf: WorkspaceLeaf, plugin: OcChatPlugin) {
     super(leaf);
@@ -77,6 +78,13 @@ export class ChatView extends ItemView {
 
     // Input area
     const inputArea = this.chatAreaEl.createDiv({ cls: "oc-input-area" });
+
+    // Include current note toggle
+    const inputOptions = inputArea.createDiv({ cls: "oc-input-options" });
+    const noteLabel = inputOptions.createEl("label", { cls: "oc-include-note-label" });
+    this.includeNoteCheckbox = noteLabel.createEl("input", { attr: { type: "checkbox" } });
+    noteLabel.createSpan({ text: "Include current note" });
+
     const inputRow = inputArea.createDiv({ cls: "oc-input-row" });
 
     this.inputEl = inputRow.createEl("textarea", {
@@ -348,11 +356,15 @@ export class ChatView extends ItemView {
 
     state.isStreaming = false;
     if (state.streamBuffer) {
+      const { text, actions } = this.extractActions(state.streamBuffer);
       state.messages.push({
         role: "assistant",
-        content: state.streamBuffer,
+        content: text,
         timestamp: Date.now(),
       });
+      if (actions.length > 0) {
+        this.executeActions(actions);
+      }
     }
     state.streamBuffer = "";
     state.streamMsgEl = null;
@@ -473,14 +485,28 @@ export class ChatView extends ItemView {
       return;
     }
 
+    // Build message — optionally prepend current note
+    let messageToSend = text;
+    let displayText = text;
+    if (this.includeNoteCheckbox?.checked) {
+      const activeFile = this.app.workspace.getActiveFile();
+      if (!activeFile) {
+        new Notice("No active note to include.");
+        return;
+      }
+      const noteContent = await this.app.vault.read(activeFile);
+      messageToSend = `[Current Note: ${activeFile.name}]\n${noteContent}\n\n---\n${text}`;
+      displayText = `📎 ${activeFile.basename}\n\n${text}`;
+    }
+
     const state = this.getAgentState(this.activeAgentId);
-    state.messages.push({ role: "user", content: text, timestamp: Date.now() });
+    state.messages.push({ role: "user", content: displayText, timestamp: Date.now() });
     this.renderMessages();
     if (this.inputEl) this.inputEl.value = "";
     this.setInputDisabled(true);
 
     try {
-      await client.sendChat(agent.sessionKey, text);
+      await client.sendChat(agent.sessionKey, messageToSend);
     } catch (e) {
       this.finishStream(this.activeAgentId);
       state.messages.push({
@@ -566,7 +592,196 @@ export class ChatView extends ItemView {
     }
   }
 
+  // ─── Action blocks ───
+
+  private extractActions(content: string): { text: string; actions: NoteAction[] } {
+    const regex = /```json:oc-actions\s*\n([\s\S]*?)```/g;
+    let actions: NoteAction[] = [];
+    const text = content.replace(regex, (_match, json) => {
+      try {
+        const parsed = JSON.parse(json.trim());
+        if (Array.isArray(parsed)) {
+          actions = actions.concat(parsed);
+        }
+      } catch {
+        // Invalid JSON — leave in message
+        return _match;
+      }
+      return "";
+    }).trim();
+    return { text, actions };
+  }
+
+  private async executeActions(actions: NoteAction[]): Promise<void> {
+    const results: string[] = [];
+
+    for (const action of actions) {
+      try {
+        switch (action.action) {
+          case "openFile": {
+            const file = this.app.vault.getAbstractFileByPath(action.path);
+            if (file instanceof TFile) {
+              await this.app.workspace.getLeaf(false).openFile(file);
+              results.push(`Opened ${action.path}`);
+            } else {
+              results.push(`File not found: ${action.path}`);
+            }
+            break;
+          }
+          case "createFile": {
+            const confirmed = await this.confirmAction(
+              "Create File",
+              `Create new note at:\n${action.path}`
+            );
+            if (!confirmed) { results.push(`Skipped creating ${action.path}`); break; }
+            const dir = action.path.substring(0, action.path.lastIndexOf("/"));
+            if (dir) {
+              await this.ensureFolder(dir);
+            }
+            await this.app.vault.create(action.path, action.content ?? "");
+            results.push(`Created ${action.path}`);
+            break;
+          }
+          case "updateFile": {
+            const confirmed = await this.confirmAction(
+              "Overwrite File",
+              `This will overwrite:\n${action.path}`
+            );
+            if (!confirmed) { results.push(`Skipped updating ${action.path}`); break; }
+            const file = this.app.vault.getAbstractFileByPath(action.path);
+            if (file instanceof TFile) {
+              await this.app.vault.modify(file, action.content ?? "");
+              results.push(`Updated ${action.path}`);
+            } else {
+              results.push(`File not found: ${action.path}`);
+            }
+            break;
+          }
+          case "appendToFile": {
+            const confirmed = await this.confirmAction(
+              "Append to File",
+              `Append content to:\n${action.path}`
+            );
+            if (!confirmed) { results.push(`Skipped appending to ${action.path}`); break; }
+            const file = this.app.vault.getAbstractFileByPath(action.path);
+            if (file instanceof TFile) {
+              await this.app.vault.append(file, action.content ?? "");
+              results.push(`Appended to ${action.path}`);
+            } else {
+              results.push(`File not found: ${action.path}`);
+            }
+            break;
+          }
+          case "deleteFile": {
+            const confirmed = await this.confirmAction(
+              "Delete File",
+              `Are you sure you want to delete:\n${action.path}\n\nThis cannot be undone.`
+            );
+            if (!confirmed) { results.push(`Skipped deleting ${action.path}`); break; }
+            const file = this.app.vault.getAbstractFileByPath(action.path);
+            if (file instanceof TFile) {
+              await this.app.vault.delete(file);
+              results.push(`Deleted ${action.path}`);
+            } else {
+              results.push(`File not found: ${action.path}`);
+            }
+            break;
+          }
+          case "renameFile": {
+            const confirmed = await this.confirmAction(
+              "Rename File",
+              `Rename:\n${action.path}\nto:\n${action.newPath}`
+            );
+            if (!confirmed) { results.push(`Skipped renaming ${action.path}`); break; }
+            const file = this.app.vault.getAbstractFileByPath(action.path);
+            if (file instanceof TFile && action.newPath) {
+              await this.app.vault.rename(file, action.newPath);
+              results.push(`Renamed ${action.path} → ${action.newPath}`);
+            } else {
+              results.push(`File not found: ${action.path}`);
+            }
+            break;
+          }
+          default:
+            results.push(`Unknown action: ${(action as NoteAction).action}`);
+        }
+      } catch (e) {
+        results.push(`Error: ${(e as Error).message}`);
+      }
+    }
+
+    if (results.length > 0) {
+      new Notice(results.join("\n"), 8000);
+    }
+  }
+
+  private confirmAction(title: string, message: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const modal = new ConfirmModal(this.app, title, message, resolve);
+      modal.open();
+    });
+  }
+
+  private async ensureFolder(path: string): Promise<void> {
+    const existing = this.app.vault.getAbstractFileByPath(path);
+    if (!existing) {
+      await this.app.vault.createFolder(path);
+    }
+  }
+
   async onClose(): Promise<void> {
     this.unbindAllAgentListeners();
+  }
+}
+
+// ─── Types ───
+
+interface NoteAction {
+  action: "createFile" | "updateFile" | "appendToFile" | "deleteFile" | "renameFile" | "openFile";
+  path: string;
+  content?: string;
+  newPath?: string;
+}
+
+// ─── Confirmation Modal ───
+
+class ConfirmModal extends Modal {
+  private title: string;
+  private message: string;
+  private resolve: (value: boolean) => void;
+
+  constructor(app: import("obsidian").App, title: string, message: string, resolve: (value: boolean) => void) {
+    super(app);
+    this.title = title;
+    this.message = message;
+    this.resolve = resolve;
+  }
+
+  onOpen(): void {
+    this.containerEl.addClass("oc-confirm-modal");
+    const { contentEl } = this;
+    contentEl.createEl("h3", { text: this.title });
+
+    for (const line of this.message.split("\n")) {
+      contentEl.createEl("p", { text: line });
+    }
+
+    const btnContainer = contentEl.createDiv({ cls: "modal-button-container" });
+
+    const cancelBtn = btnContainer.createEl("button", { text: "Cancel" });
+    cancelBtn.addEventListener("click", () => {
+      this.resolve(false);
+      this.close();
+    });
+
+    const confirmBtn = btnContainer.createEl("button", { cls: "mod-cta", text: "Confirm" });
+    confirmBtn.addEventListener("click", () => {
+      this.resolve(true);
+      this.close();
+    });
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
   }
 }

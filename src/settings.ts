@@ -27,6 +27,15 @@ export class OcChatSettingTab extends PluginSettingTab {
       this.renderAgentCard(agentList, agent);
     }
 
+    // Note Sync placeholder
+    containerEl.createEl("h2", { text: "Integrations" });
+    new Setting(containerEl)
+      .setName("Note Sync")
+      .setDesc("Coming Soon — two-way note synchronisation with agents")
+      .addToggle((toggle) =>
+        toggle.setValue(false).setDisabled(true)
+      );
+
     // Add Agent button
     new Setting(containerEl)
       .addButton((btn) =>
