@@ -492,6 +492,22 @@ var ChatView = class extends import_obsidian.ItemView {
   handleChatEvent(agentId, payload) {
     var _a;
     const state = this.getAgentState(agentId);
+    if (payload.state === "final" && payload.message) {
+      const text = payload.message.content.filter((c) => c.type === "text").map((c) => c.text).join("").trim();
+      if (text === "HEARTBEAT_OK" || text === "OK" || text === "NO_REPLY") {
+        this.finishStream(agentId);
+        if (agentId === this.activeAgentId) {
+          this.setInputDisabled(false);
+        }
+        return;
+      }
+    }
+    if (payload.state === "delta" && payload.message) {
+      const text = payload.message.content.filter((c) => c.type === "text").map((c) => c.text).join("").trim();
+      if (text === "HEARTBEAT_OK" || text === "OK" || text === "NO_REPLY") {
+        return;
+      }
+    }
     if (payload.state === "error") {
       this.finishStream(agentId);
       state.messages.push({
