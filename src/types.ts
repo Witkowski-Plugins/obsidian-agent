@@ -28,8 +28,14 @@ export interface GatewayFrame {
 }
 
 export interface ChatEventPayload {
-  delta?: string;
-  done?: boolean;
-  runId?: string;
-  error?: string;
+  runId: string;
+  sessionKey: string;
+  seq: number;
+  state: "delta" | "final" | "error";
+  message?: {
+    role: "assistant";
+    content: Array<{ type: string; text: string }>;
+    timestamp: number;
+  };
+  errorMessage?: string;
 }

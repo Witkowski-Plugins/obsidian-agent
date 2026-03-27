@@ -350,16 +350,22 @@ var ChatView = class extends import_obsidian.ItemView {
     });
     this.sendBtn.addEventListener("click", () => this.handleSend());
     this.gateway.onChat((payload) => {
-      if (payload.error) {
+      var _a;
+      if (payload.state === "error") {
         this.finishStream();
-        this.addMessage({ role: "assistant", content: `Error: ${payload.error}`, timestamp: Date.now() });
+        this.addMessage({ role: "assistant", content: `Error: ${(_a = payload.errorMessage) != null ? _a : "Unknown error"}`, timestamp: Date.now() });
         this.setInputDisabled(false);
         return;
       }
-      if (payload.delta) {
-        this.appendStream(payload.delta);
+      if (payload.state === "delta" && payload.message) {
+        const text = payload.message.content.filter((c) => c.type === "text").map((c) => c.text).join("");
+        this.replaceStream(text);
       }
-      if (payload.done) {
+      if (payload.state === "final") {
+        if (payload.message) {
+          const text = payload.message.content.filter((c) => c.type === "text").map((c) => c.text).join("");
+          this.replaceStream(text);
+        }
         this.finishStream();
         this.setInputDisabled(false);
       }
@@ -399,7 +405,7 @@ var ChatView = class extends import_obsidian.ItemView {
     const bubble = el.createDiv({ cls: "oc-bubble" });
     bubble.setText(msg.content);
   }
-  appendStream(delta) {
+  replaceStream(fullText) {
     if (!this.messagesEl)
       return;
     if (!this.isStreaming) {
@@ -410,7 +416,7 @@ var ChatView = class extends import_obsidian.ItemView {
       });
       this.streamMsgEl = el.createDiv({ cls: "oc-bubble" });
     }
-    this.streamBuffer += delta;
+    this.streamBuffer = fullText;
     if (this.streamMsgEl) {
       this.streamMsgEl.setText(this.streamBuffer);
     }

@@ -93,16 +93,27 @@ export class ChatView extends ItemView {
 
     // Listen for gateway events
     this.gateway.onChat((payload) => {
-      if (payload.error) {
+      if (payload.state === "error") {
         this.finishStream();
-        this.addMessage({ role: "assistant", content: `Error: ${payload.error}`, timestamp: Date.now() });
+        this.addMessage({ role: "assistant", content: `Error: ${payload.errorMessage ?? "Unknown error"}`, timestamp: Date.now() });
         this.setInputDisabled(false);
         return;
       }
-      if (payload.delta) {
-        this.appendStream(payload.delta);
+      if (payload.state === "delta" && payload.message) {
+        const text = payload.message.content
+          .filter((c) => c.type === "text")
+          .map((c) => c.text)
+          .join("");
+        this.replaceStream(text);
       }
-      if (payload.done) {
+      if (payload.state === "final") {
+        if (payload.message) {
+          const text = payload.message.content
+            .filter((c) => c.type === "text")
+            .map((c) => c.text)
+            .join("");
+          this.replaceStream(text);
+        }
         this.finishStream();
         this.setInputDisabled(false);
       }
@@ -143,7 +154,7 @@ export class ChatView extends ItemView {
     bubble.setText(msg.content);
   }
 
-  private appendStream(delta: string): void {
+  private replaceStream(fullText: string): void {
     if (!this.messagesEl) return;
     if (!this.isStreaming) {
       this.isStreaming = true;
@@ -153,7 +164,7 @@ export class ChatView extends ItemView {
       });
       this.streamMsgEl = el.createDiv({ cls: "oc-bubble" });
     }
-    this.streamBuffer += delta;
+    this.streamBuffer = fullText;
     if (this.streamMsgEl) {
       this.streamMsgEl.setText(this.streamBuffer);
     }
