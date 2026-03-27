@@ -158,8 +158,6 @@ var GatewayClient = class {
       scopes: ["operator.read", "operator.write"],
       auth: { token: this.token }
     };
-    if (nonce)
-      params.nonce = nonce;
     const frame = { type: "req", id, method: "connect", params };
     this.sendFrame(frame);
     this.pendingRequests.set(id, {
@@ -238,8 +236,6 @@ var GatewayClient = class {
           scopes: ["operator.read", "operator.write"],
           auth: { token }
         };
-        if (nonce)
-          params.nonce = nonce;
         ws.send(JSON.stringify({ type: "req", id, method: "connect", params }));
         ws.onmessage = (evt) => {
           var _a, _b;

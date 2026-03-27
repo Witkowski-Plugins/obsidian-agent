@@ -154,7 +154,6 @@ export class GatewayClient {
       scopes: ["operator.read", "operator.write"],
       auth: { token: this.token },
     };
-    if (nonce) params.nonce = nonce;
 
     const frame: GatewayFrame = { type: "req", id, method: "connect", params };
     this.sendFrame(frame);
@@ -240,7 +239,6 @@ export class GatewayClient {
           scopes: ["operator.read", "operator.write"],
           auth: { token },
         };
-        if (nonce) params.nonce = nonce;
 
         ws.send(JSON.stringify({ type: "req", id, method: "connect", params }));
 
