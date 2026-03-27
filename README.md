@@ -20,13 +20,13 @@ Chat with your AdviseCare OpenClaw AI agent directly from inside Obsidian.
 
 1. Install the **BRAT** plugin in Obsidian (Community Plugins → Browse → BRAT)
 2. Open BRAT settings → **Add Beta Plugin**
-3. Enter this repository URL: `https://github.com/jwitkowski17/advisecare-obsidian`
+3. Enter this repository URL: `https://github.com/Witkowski-Plugins/obsidian-agent`
 4. Enable the plugin in Community Plugins settings
 
 ## Setup
 
 1. Open Settings → **AdviseCare Agent**
-2. Enter your **Gateway URL** (e.g. `https://medicaremax.tail7bf253.ts.net`)
+2. Enter your **Gateway URL** (e.g. `https://your-machine.your-tailnet.ts.net`)
 3. Enter your **Gateway Token** (re-required after each Obsidian restart)
 4. Click **Test Connection** to verify
 5. Click the message-circle icon in the ribbon to open the chat panel

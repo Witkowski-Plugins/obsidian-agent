@@ -503,7 +503,7 @@ var AdviseCareSettingTab = class extends import_obsidian2.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "AdviseCare Agent Settings" });
-    new import_obsidian2.Setting(containerEl).setName("Gateway URL").setDesc("Your OpenClaw gateway URL. E.g. https://medicaremax.tail7bf253.ts.net").addText(
+    new import_obsidian2.Setting(containerEl).setName("Gateway URL").setDesc("Your OpenClaw gateway URL. E.g. https://your-machine.your-tailnet.ts.net").addText(
       (text) => text.setPlaceholder("https://your-gateway.ts.net").setValue(this.plugin.settings.gatewayUrl).onChange(async (value) => {
         this.plugin.settings.gatewayUrl = value.replace(/\/+$/, "");
         await this.plugin.saveSettings();

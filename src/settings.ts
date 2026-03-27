@@ -22,7 +22,7 @@ export class AdviseCareSettingTab extends PluginSettingTab {
     // Gateway URL
     new Setting(containerEl)
       .setName("Gateway URL")
-      .setDesc("Your OpenClaw gateway URL. E.g. https://medicaremax.tail7bf253.ts.net")
+      .setDesc("Your OpenClaw gateway URL. E.g. https://your-machine.your-tailnet.ts.net")
       .addText((text) =>
         text
           .setPlaceholder("https://your-gateway.ts.net")
