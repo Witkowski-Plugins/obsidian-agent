@@ -141,8 +141,8 @@ export class GatewayClient {
   private sendConnect(nonce: string | null): void {
     const id = this.nextId();
     const params: Record<string, unknown> = {
-      minProtocol: 1,
-      maxProtocol: 1,
+      minProtocol: 3,
+      maxProtocol: 3,
       client: {
         id: "webchat",
         version: "1.0.0",
@@ -232,8 +232,8 @@ export class GatewayClient {
 
         const id = `test-${Date.now()}`;
         const params: Record<string, unknown> = {
-          minProtocol: 1,
-          maxProtocol: 1,
+          minProtocol: 3,
+          maxProtocol: 3,
           client: { id: "webchat", version: "1.0.0", platform: "obsidian", mode: "ui", displayName: "Obsidian" },
           role: "operator",
           scopes: ["operator.read", "operator.write"],
