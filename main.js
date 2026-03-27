@@ -47,6 +47,12 @@ var GatewayClient = class {
   onStateChange(fn) {
     this.stateListeners.push(fn);
   }
+  offChat(fn) {
+    this.chatListeners = this.chatListeners.filter((f) => f !== fn);
+  }
+  offStateChange(fn) {
+    this.stateListeners = this.stateListeners.filter((f) => f !== fn);
+  }
   emitChat(payload) {
     for (const fn of this.chatListeners)
       fn(payload);
@@ -282,29 +288,69 @@ var GatewayClient = class {
     }
   }
 };
+var GatewayManager = class {
+  constructor() {
+    this.clients = /* @__PURE__ */ new Map();
+  }
+  getClient(agentId) {
+    let client = this.clients.get(agentId);
+    if (!client) {
+      client = new GatewayClient();
+      this.clients.set(agentId, client);
+    }
+    return client;
+  }
+  connectAgent(agentId, gatewayUrl, token) {
+    const client = this.getClient(agentId);
+    client.connect(gatewayUrl, token);
+  }
+  disconnectAgent(agentId) {
+    const client = this.clients.get(agentId);
+    if (client) {
+      client.disconnect();
+    }
+  }
+  disconnectAll() {
+    for (const [, client] of this.clients) {
+      client.disconnect();
+    }
+  }
+  removeAgent(agentId) {
+    this.disconnectAgent(agentId);
+    this.clients.delete(agentId);
+  }
+  isConnected(agentId) {
+    var _a, _b;
+    return (_b = (_a = this.clients.get(agentId)) == null ? void 0 : _a.isConnected()) != null ? _b : false;
+  }
+};
 
 // src/chat-view.ts
 var import_obsidian = require("obsidian");
 var CHAT_VIEW_TYPE = "oc-chat";
 var ChatView = class extends import_obsidian.ItemView {
-  constructor(leaf, plugin, gateway) {
+  constructor(leaf, plugin) {
     super(leaf);
-    this.messages = [];
+    this.activeAgentId = null;
+    // Per-agent chat state (in-memory)
+    this.agentStates = /* @__PURE__ */ new Map();
+    // Per-agent listener references for cleanup
+    this.boundListeners = /* @__PURE__ */ new Map();
+    // DOM refs
+    this.tabBarEl = null;
+    this.chatAreaEl = null;
     this.messagesEl = null;
     this.inputEl = null;
     this.sendBtn = null;
     this.statusEl = null;
-    this.streamBuffer = "";
-    this.streamMsgEl = null;
-    this.isStreaming = false;
+    this.emptyStateEl = null;
     this.plugin = plugin;
-    this.gateway = gateway;
   }
   getViewType() {
     return CHAT_VIEW_TYPE;
   }
   getDisplayText() {
-    return `${this.plugin.settings.agentName} \u2014 OpenClaw`;
+    return "OpenClaw Chat";
   }
   getIcon() {
     return "message-circle";
@@ -313,30 +359,20 @@ var ChatView = class extends import_obsidian.ItemView {
     const container = this.containerEl.children[1];
     container.empty();
     container.addClass("oc-chat-container");
-    const header = container.createDiv({ cls: "oc-header" });
-    header.createEl("span", {
-      cls: "oc-header-title",
-      text: this.plugin.settings.agentName
-    });
-    const clearBtn = header.createEl("button", {
-      cls: "oc-clear-btn",
-      text: "Clear"
-    });
-    clearBtn.addEventListener("click", () => this.clearMessages());
-    this.statusEl = container.createDiv({ cls: "oc-status-bar" });
-    this.updateStatus();
-    this.messagesEl = container.createDiv({ cls: "oc-messages" });
-    for (const msg of this.messages) {
-      this.renderMessage(msg);
-    }
-    this.scrollToBottom();
-    if (!this.plugin.runtimeToken) {
-      this.showTokenWarning();
-    }
-    const inputArea = container.createDiv({ cls: "oc-input-area" });
-    this.inputEl = inputArea.createEl("textarea", {
+    this.tabBarEl = container.createDiv({ cls: "oc-tab-bar" });
+    this.chatAreaEl = container.createDiv({ cls: "oc-chat-area" });
+    const statusRow = this.chatAreaEl.createDiv({ cls: "oc-status-row" });
+    this.statusEl = statusRow.createSpan({ cls: "oc-status-bar disconnected" });
+    this.statusEl.setText("\u25CB Disconnected");
+    const clearBtn = statusRow.createEl("button", { cls: "oc-clear-btn", text: "Clear" });
+    clearBtn.addEventListener("click", () => this.clearActiveChat());
+    this.messagesEl = this.chatAreaEl.createDiv({ cls: "oc-messages" });
+    this.emptyStateEl = container.createDiv({ cls: "oc-empty-state" });
+    const inputArea = this.chatAreaEl.createDiv({ cls: "oc-input-area" });
+    const inputRow = inputArea.createDiv({ cls: "oc-input-row" });
+    this.inputEl = inputRow.createEl("textarea", {
       cls: "oc-input",
-      attr: { placeholder: `Message ${this.plugin.settings.agentName}\u2026`, rows: "3" }
+      attr: { placeholder: "Message\u2026", rows: "2" }
     });
     this.inputEl.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
@@ -344,127 +380,317 @@ var ChatView = class extends import_obsidian.ItemView {
         this.handleSend();
       }
     });
-    this.sendBtn = inputArea.createEl("button", {
-      cls: "oc-send-btn",
-      text: "Send"
-    });
+    this.sendBtn = inputRow.createEl("button", { cls: "oc-send-btn" });
+    (0, import_obsidian.setIcon)(this.sendBtn, "send");
+    this.sendBtn.setAttribute("aria-label", "Send");
     this.sendBtn.addEventListener("click", () => this.handleSend());
-    this.gateway.onChat((payload) => {
-      var _a;
-      if (payload.state === "error") {
-        this.finishStream();
-        this.addMessage({ role: "assistant", content: `Error: ${(_a = payload.errorMessage) != null ? _a : "Unknown error"}`, timestamp: Date.now() });
-        this.setInputDisabled(false);
-        return;
-      }
-      if (payload.state === "delta" && payload.message) {
-        const text = payload.message.content.filter((c) => c.type === "text").map((c) => c.text).join("");
-        this.replaceStream(text);
-      }
-      if (payload.state === "final") {
-        if (payload.message) {
-          const text = payload.message.content.filter((c) => c.type === "text").map((c) => c.text).join("");
-          this.replaceStream(text);
-        }
-        this.finishStream();
-        this.setInputDisabled(false);
-      }
-    });
-    this.gateway.onStateChange((connected) => {
-      this.updateStatus();
-      if (!connected && this.isStreaming) {
-        this.finishStream();
-        this.setInputDisabled(false);
-      }
-    });
+    this.buildTabs();
+    this.bindAllAgentListeners();
+    const enabled = this.plugin.settings.agents.filter((a) => a.enabled);
+    if (enabled.length > 0) {
+      this.switchToAgent(enabled[0].id);
+    } else {
+      this.showEmptyState();
+    }
   }
-  showTokenWarning() {
+  /** Called by plugin when agent list changes */
+  refresh() {
+    this.unbindAllAgentListeners();
+    this.buildTabs();
+    this.bindAllAgentListeners();
+    const enabled = this.plugin.settings.agents.filter((a) => a.enabled);
+    if (enabled.length === 0) {
+      this.activeAgentId = null;
+      this.showEmptyState();
+    } else if (!this.activeAgentId || !enabled.find((a) => a.id === this.activeAgentId)) {
+      this.switchToAgent(enabled[0].id);
+    } else {
+      this.switchToAgent(this.activeAgentId);
+    }
+  }
+  switchToAgent(agentId) {
     var _a;
-    if (!this.messagesEl)
+    this.activeAgentId = agentId;
+    const agent = this.plugin.settings.agents.find((a) => a.id === agentId);
+    if (!agent)
       return;
-    const warn = this.messagesEl.createDiv({ cls: "oc-token-warning" });
-    warn.innerHTML = `\u26A0\uFE0F Gateway token not set. <a class="oc-settings-link">Open Settings</a> to enter your token.`;
-    (_a = warn.querySelector(".oc-settings-link")) == null ? void 0 : _a.addEventListener("click", () => {
+    if (this.emptyStateEl)
+      this.emptyStateEl.style.display = "none";
+    if (this.chatAreaEl)
+      this.chatAreaEl.style.display = "flex";
+    (_a = this.tabBarEl) == null ? void 0 : _a.querySelectorAll(".oc-tab").forEach((tab) => {
+      tab.toggleClass("active", tab.getAttribute("data-agent-id") === agentId);
+    });
+    if (this.inputEl) {
+      this.inputEl.placeholder = `Message ${agent.name || "Agent"}\u2026`;
+    }
+    this.renderMessages();
+    this.updateStatus();
+    const hasToken = this.plugin.tokenStore.has(agentId);
+    const connected = this.plugin.gatewayManager.isConnected(agentId);
+    if (!hasToken && !connected) {
+      this.showInlineWarning("Token not set \u2014 open Settings to enter your gateway token.");
+    }
+  }
+  // ─── Tab bar ───
+  buildTabs() {
+    if (!this.tabBarEl)
+      return;
+    this.tabBarEl.empty();
+    const enabled = this.plugin.settings.agents.filter((a) => a.enabled);
+    for (const agent of enabled) {
+      const tab = this.tabBarEl.createDiv({
+        cls: "oc-tab",
+        attr: { "data-agent-id": agent.id }
+      });
+      const connected = this.plugin.gatewayManager.isConnected(agent.id);
+      tab.createSpan({ cls: `oc-tab-dot ${connected ? "connected" : "disconnected"}` });
+      tab.createSpan({ cls: "oc-tab-name", text: agent.name || "Agent" });
+      tab.addEventListener("click", () => this.switchToAgent(agent.id));
+      if (agent.id === this.activeAgentId) {
+        tab.addClass("active");
+      }
+    }
+    const addTab = this.tabBarEl.createDiv({ cls: "oc-tab oc-tab-add" });
+    addTab.createSpan({ text: "+" });
+    addTab.addEventListener("click", () => {
       this.app.setting.open();
       this.app.setting.openTabById("openclaw-chat");
     });
   }
-  updateStatus() {
-    if (!this.statusEl)
-      return;
-    const connected = this.gateway.isConnected();
-    this.statusEl.setText(connected ? "\u25CF Connected" : "\u25CB Disconnected");
-    this.statusEl.className = `oc-status-bar ${connected ? "connected" : "disconnected"}`;
+  // ─── Listener management ───
+  bindAllAgentListeners() {
+    for (const agent of this.plugin.settings.agents) {
+      if (!agent.enabled)
+        continue;
+      this.bindAgentListeners(agent);
+    }
   }
-  renderMessage(msg) {
+  bindAgentListeners(agent) {
+    if (this.boundListeners.has(agent.id))
+      return;
+    const client = this.plugin.gatewayManager.getClient(agent.id);
+    const chatListener = (payload) => {
+      this.handleChatEvent(agent.id, payload);
+    };
+    const stateListener = (connected) => {
+      this.handleStateChange(agent.id, connected);
+    };
+    client.onChat(chatListener);
+    client.onStateChange(stateListener);
+    this.boundListeners.set(agent.id, { chat: chatListener, state: stateListener });
+  }
+  unbindAllAgentListeners() {
+    for (const [agentId, listeners] of this.boundListeners) {
+      const client = this.plugin.gatewayManager.getClient(agentId);
+      client.offChat(listeners.chat);
+      client.offStateChange(listeners.state);
+    }
+    this.boundListeners.clear();
+  }
+  // ─── Event handlers ───
+  handleChatEvent(agentId, payload) {
+    var _a;
+    const state = this.getAgentState(agentId);
+    if (payload.state === "error") {
+      this.finishStream(agentId);
+      state.messages.push({
+        role: "assistant",
+        content: `Error: ${(_a = payload.errorMessage) != null ? _a : "Unknown error"}`,
+        timestamp: Date.now()
+      });
+      if (agentId === this.activeAgentId) {
+        this.renderMessages();
+        this.setInputDisabled(false);
+      }
+      return;
+    }
+    if (payload.state === "delta" && payload.message) {
+      const text = payload.message.content.filter((c) => c.type === "text").map((c) => c.text).join("");
+      this.replaceStream(agentId, text);
+    }
+    if (payload.state === "final") {
+      if (payload.message) {
+        const text = payload.message.content.filter((c) => c.type === "text").map((c) => c.text).join("");
+        this.replaceStream(agentId, text);
+      }
+      this.finishStream(agentId);
+      if (agentId === this.activeAgentId) {
+        this.setInputDisabled(false);
+      }
+    }
+  }
+  handleStateChange(agentId, connected) {
+    var _a;
+    const tab = (_a = this.tabBarEl) == null ? void 0 : _a.querySelector(`[data-agent-id="${agentId}"]`);
+    const dot = tab == null ? void 0 : tab.querySelector(".oc-tab-dot");
+    if (dot) {
+      dot.className = `oc-tab-dot ${connected ? "connected" : "disconnected"}`;
+    }
+    if (agentId === this.activeAgentId) {
+      this.updateStatus();
+      if (!connected) {
+        const state = this.getAgentState(agentId);
+        if (state.isStreaming) {
+          this.finishStream(agentId);
+          this.setInputDisabled(false);
+        }
+      }
+    }
+  }
+  // ─── Streaming ───
+  replaceStream(agentId, fullText) {
+    const state = this.getAgentState(agentId);
+    if (!state.isStreaming) {
+      state.isStreaming = true;
+      state.streamBuffer = "";
+      state.streamMsgEl = null;
+    }
+    state.streamBuffer = fullText;
+    if (agentId === this.activeAgentId && this.messagesEl) {
+      if (!state.streamMsgEl) {
+        const agent = this.plugin.settings.agents.find((a) => a.id === agentId);
+        const el = this.messagesEl.createDiv({
+          cls: "oc-message oc-message-assistant oc-streaming"
+        });
+        el.createDiv({ cls: "oc-agent-label", text: (agent == null ? void 0 : agent.name) || "Agent" });
+        state.streamMsgEl = el.createDiv({ cls: "oc-bubble" });
+      }
+      state.streamMsgEl.setText(state.streamBuffer);
+      this.scrollToBottom();
+    }
+  }
+  finishStream(agentId) {
+    const state = this.getAgentState(agentId);
+    if (!state.isStreaming)
+      return;
+    state.isStreaming = false;
+    if (state.streamBuffer) {
+      state.messages.push({
+        role: "assistant",
+        content: state.streamBuffer,
+        timestamp: Date.now()
+      });
+    }
+    state.streamBuffer = "";
+    state.streamMsgEl = null;
+    if (agentId === this.activeAgentId) {
+      this.renderMessages();
+    }
+  }
+  // ─── Rendering ───
+  renderMessages() {
+    if (!this.messagesEl || !this.activeAgentId)
+      return;
+    this.messagesEl.empty();
+    const state = this.getAgentState(this.activeAgentId);
+    const agent = this.plugin.settings.agents.find((a) => a.id === this.activeAgentId);
+    for (const msg of state.messages) {
+      this.renderMessage(msg, agent);
+    }
+    if (state.isStreaming && state.streamBuffer) {
+      const el = this.messagesEl.createDiv({
+        cls: "oc-message oc-message-assistant oc-streaming"
+      });
+      el.createDiv({ cls: "oc-agent-label", text: (agent == null ? void 0 : agent.name) || "Agent" });
+      state.streamMsgEl = el.createDiv({ cls: "oc-bubble" });
+      state.streamMsgEl.setText(state.streamBuffer);
+    }
+    this.scrollToBottom();
+  }
+  renderMessage(msg, agent) {
     if (!this.messagesEl)
       return;
     const el = this.messagesEl.createDiv({
       cls: `oc-message oc-message-${msg.role}`
     });
+    if (msg.role === "assistant") {
+      el.createDiv({ cls: "oc-agent-label", text: (agent == null ? void 0 : agent.name) || "Agent" });
+    }
     const bubble = el.createDiv({ cls: "oc-bubble" });
     bubble.setText(msg.content);
+    const ts = new Date(msg.timestamp);
+    const timeStr = ts.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    bubble.setAttribute("title", timeStr);
   }
-  replaceStream(fullText) {
+  updateStatus() {
+    if (!this.statusEl || !this.activeAgentId)
+      return;
+    const connected = this.plugin.gatewayManager.isConnected(this.activeAgentId);
+    this.statusEl.setText(connected ? "\u25CF Connected" : "\u25CB Disconnected");
+    this.statusEl.className = `oc-status-bar ${connected ? "connected" : "disconnected"}`;
+  }
+  showEmptyState() {
+    if (this.chatAreaEl)
+      this.chatAreaEl.style.display = "none";
+    if (!this.emptyStateEl)
+      return;
+    this.emptyStateEl.style.display = "flex";
+    this.emptyStateEl.empty();
+    this.emptyStateEl.createDiv({ cls: "oc-empty-icon" });
+    (0, import_obsidian.setIcon)(this.emptyStateEl.querySelector(".oc-empty-icon"), "message-circle");
+    this.emptyStateEl.createDiv({
+      cls: "oc-empty-title",
+      text: "No agents configured"
+    });
+    const link = this.emptyStateEl.createEl("a", {
+      cls: "oc-empty-link",
+      text: "Open Settings to add an agent"
+    });
+    link.addEventListener("click", () => {
+      this.app.setting.open();
+      this.app.setting.openTabById("openclaw-chat");
+    });
+  }
+  showInlineWarning(text) {
     if (!this.messagesEl)
       return;
-    if (!this.isStreaming) {
-      this.isStreaming = true;
-      this.streamBuffer = "";
-      const el = this.messagesEl.createDiv({
-        cls: "oc-message oc-message-assistant oc-streaming"
-      });
-      this.streamMsgEl = el.createDiv({ cls: "oc-bubble" });
-    }
-    this.streamBuffer = fullText;
-    if (this.streamMsgEl) {
-      this.streamMsgEl.setText(this.streamBuffer);
-    }
-    this.scrollToBottom();
-  }
-  finishStream() {
-    var _a, _b;
-    if (!this.isStreaming)
+    const state = this.getAgentState(this.activeAgentId);
+    if (state.messages.length > 0)
       return;
-    this.isStreaming = false;
-    if (this.streamBuffer) {
-      this.messages.push({
-        role: "assistant",
-        content: this.streamBuffer,
-        timestamp: Date.now()
-      });
-    }
-    this.streamBuffer = "";
-    this.streamMsgEl = null;
-    (_b = (_a = this.messagesEl) == null ? void 0 : _a.querySelector(".oc-streaming")) == null ? void 0 : _b.removeClass("oc-streaming");
+    const warn = this.messagesEl.createDiv({ cls: "oc-token-warning" });
+    const warningText = warn.createSpan({ text: "\u26A0 " + text + " " });
+    const link = warningText.createEl("a", { cls: "oc-settings-link", text: "Open Settings" });
+    link.addEventListener("click", () => {
+      this.app.setting.open();
+      this.app.setting.openTabById("openclaw-chat");
+    });
   }
-  addMessage(msg) {
-    this.messages.push(msg);
-    this.renderMessage(msg);
-    this.scrollToBottom();
-  }
+  // ─── Input ───
   async handleSend() {
     var _a, _b;
     const text = (_b = (_a = this.inputEl) == null ? void 0 : _a.value) == null ? void 0 : _b.trim();
-    if (!text)
+    if (!text || !this.activeAgentId)
       return;
-    if (!this.gateway.isConnected()) {
+    const agent = this.plugin.settings.agents.find((a) => a.id === this.activeAgentId);
+    if (!agent)
+      return;
+    const client = this.plugin.gatewayManager.getClient(this.activeAgentId);
+    if (!client.isConnected()) {
       new import_obsidian.Notice("Not connected to gateway. Check Settings.");
       return;
     }
-    if (!this.plugin.runtimeToken) {
+    const token = this.plugin.tokenStore.get(this.activeAgentId);
+    if (!token) {
       new import_obsidian.Notice("Gateway token not set. Open Settings to enter it.");
       return;
     }
-    this.addMessage({ role: "user", content: text, timestamp: Date.now() });
+    const state = this.getAgentState(this.activeAgentId);
+    state.messages.push({ role: "user", content: text, timestamp: Date.now() });
+    this.renderMessages();
     if (this.inputEl)
       this.inputEl.value = "";
     this.setInputDisabled(true);
     try {
-      await this.gateway.sendChat(this.plugin.settings.sessionKey, text);
+      await client.sendChat(agent.sessionKey, text);
     } catch (e) {
-      this.finishStream();
-      this.addMessage({ role: "assistant", content: `Failed to send: ${e.message}`, timestamp: Date.now() });
+      this.finishStream(this.activeAgentId);
+      state.messages.push({
+        role: "assistant",
+        content: `Failed to send: ${e.message}`,
+        timestamp: Date.now()
+      });
+      this.renderMessages();
       this.setInputDisabled(false);
     }
   }
@@ -474,107 +700,247 @@ var ChatView = class extends import_obsidian.ItemView {
     if (this.sendBtn)
       this.sendBtn.disabled = disabled;
   }
-  clearMessages() {
-    this.messages = [];
-    if (this.messagesEl) {
-      this.messagesEl.empty();
-      if (!this.plugin.runtimeToken) {
-        this.showTokenWarning();
-      }
+  // ─── Agent state ───
+  getAgentState(agentId) {
+    let state = this.agentStates.get(agentId);
+    if (!state) {
+      state = {
+        messages: [],
+        streamBuffer: "",
+        streamMsgEl: null,
+        isStreaming: false
+      };
+      this.agentStates.set(agentId, state);
+    }
+    return state;
+  }
+  /** Send a message programmatically as the user (used by "Ask Agent about this note") */
+  async sendMessage(text) {
+    if (!this.activeAgentId)
+      return;
+    const agent = this.plugin.settings.agents.find((a) => a.id === this.activeAgentId);
+    if (!agent)
+      return;
+    const client = this.plugin.gatewayManager.getClient(this.activeAgentId);
+    if (!client.isConnected()) {
+      new import_obsidian.Notice("Not connected to gateway. Check Settings.");
+      return;
+    }
+    const state = this.getAgentState(this.activeAgentId);
+    state.messages.push({ role: "user", content: text, timestamp: Date.now() });
+    this.renderMessages();
+    this.setInputDisabled(true);
+    try {
+      await client.sendChat(agent.sessionKey, text);
+    } catch (e) {
+      this.finishStream(this.activeAgentId);
+      state.messages.push({
+        role: "assistant",
+        content: `Failed to send: ${e.message}`,
+        timestamp: Date.now()
+      });
+      this.renderMessages();
+      this.setInputDisabled(false);
     }
   }
+  clearActiveChat() {
+    if (!this.activeAgentId)
+      return;
+    const state = this.getAgentState(this.activeAgentId);
+    state.messages = [];
+    state.streamBuffer = "";
+    state.streamMsgEl = null;
+    state.isStreaming = false;
+    this.renderMessages();
+  }
+  // ─── Utils ───
   scrollToBottom() {
     if (this.messagesEl) {
-      this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+      requestAnimationFrame(() => {
+        if (this.messagesEl) {
+          this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+        }
+      });
     }
   }
   async onClose() {
+    this.unbindAllAgentListeners();
   }
 };
 
 // src/settings.ts
 var import_obsidian2 = require("obsidian");
 var OcChatSettingTab = class extends import_obsidian2.PluginSettingTab {
-  constructor(app, plugin, gateway) {
+  constructor(app, plugin) {
     super(app, plugin);
-    this.tokenField = null;
     this.plugin = plugin;
-    this.gateway = gateway;
   }
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "OpenClaw Chat Settings" });
-    new import_obsidian2.Setting(containerEl).setName("Gateway URL").setDesc("Your OpenClaw gateway URL. E.g. https://your-machine.your-tailnet.ts.net").addText(
-      (text) => text.setPlaceholder("https://your-gateway.ts.net").setValue(this.plugin.settings.gatewayUrl).onChange(async (value) => {
-        this.plugin.settings.gatewayUrl = value.replace(/\/+$/, "");
+    containerEl.addClass("oc-settings");
+    containerEl.createEl("h2", { text: "OpenClaw Chat \u2014 Agents" });
+    containerEl.createEl("p", {
+      text: "Configure one or more AI agents. Tokens are stored in memory only and must be re-entered after restarting Obsidian.",
+      cls: "setting-item-description"
+    });
+    const agentList = containerEl.createDiv({ cls: "oc-agent-list" });
+    for (const agent of this.plugin.settings.agents) {
+      this.renderAgentCard(agentList, agent);
+    }
+    new import_obsidian2.Setting(containerEl).addButton(
+      (btn) => btn.setButtonText("+ Add Agent").setCta().onClick(async () => {
+        const id = crypto.randomUUID();
+        const agent = {
+          id,
+          name: "",
+          gatewayUrl: "",
+          sessionKey: "obsidian:main",
+          enabled: true
+        };
+        this.plugin.settings.agents.push(agent);
+        await this.plugin.saveSettings();
+        this.display();
+      })
+    );
+  }
+  renderAgentCard(container, agent) {
+    const card = container.createDiv({ cls: "oc-agent-card" });
+    const connected = this.plugin.gatewayManager.isConnected(agent.id);
+    const header = card.createDiv({ cls: "oc-agent-card-header" });
+    header.createSpan({
+      cls: `oc-status-dot ${connected ? "connected" : "disconnected"}`
+    });
+    const titleEl = header.createSpan({
+      cls: "oc-agent-card-title",
+      text: agent.name || "Unnamed Agent"
+    });
+    const urlHint = header.createSpan({
+      cls: "oc-agent-card-url",
+      text: this.safeHostname(agent.gatewayUrl)
+    });
+    const expandBtn = header.createEl("button", {
+      cls: "oc-agent-expand-btn clickable-icon",
+      attr: { "aria-label": "Expand" }
+    });
+    (0, import_obsidian2.setIcon)(expandBtn, "chevron-down");
+    const body = card.createDiv({ cls: "oc-agent-card-body collapsed" });
+    const toggleExpand = () => {
+      body.toggleClass("collapsed", !body.hasClass("collapsed"));
+      expandBtn.toggleClass("expanded", !body.hasClass("collapsed"));
+    };
+    expandBtn.addEventListener("click", toggleExpand);
+    header.addEventListener("click", (e) => {
+      if (e.target === expandBtn || expandBtn.contains(e.target))
+        return;
+      toggleExpand();
+    });
+    new import_obsidian2.Setting(body).setName("Agent Name").setDesc("Display name shown in chat tabs").addText(
+      (text) => text.setPlaceholder("e.g. Agent").setValue(agent.name).onChange(async (value) => {
+        agent.name = value;
+        titleEl.setText(value || "Unnamed Agent");
         await this.plugin.saveSettings();
       })
     );
-    const tokenSetting = new import_obsidian2.Setting(containerEl).setName("Gateway Token").setDesc(
-      "Authentication token. Stored in memory only \u2014 you will need to re-enter after restarting Obsidian."
+    new import_obsidian2.Setting(body).setName("Gateway URL").setDesc("Your OpenClaw gateway URL").addText(
+      (text) => text.setPlaceholder("https://your-gateway.ts.net").setValue(agent.gatewayUrl).onChange(async (value) => {
+        agent.gatewayUrl = value.replace(/\/+$/, "");
+        urlHint.setText(this.safeHostname(value));
+        await this.plugin.saveSettings();
+      })
     );
-    tokenSetting.addText((text) => {
-      this.tokenField = text.inputEl;
+    new import_obsidian2.Setting(body).setName("Gateway Token").setDesc("Stored in memory only \u2014 re-enter after restart").addText((text) => {
+      var _a;
       text.inputEl.type = "password";
       text.inputEl.placeholder = "Paste your gateway token";
-      text.inputEl.value = this.plugin.runtimeToken;
+      text.inputEl.value = (_a = this.plugin.tokenStore.get(agent.id)) != null ? _a : "";
       text.inputEl.addEventListener("change", (e) => {
-        this.plugin.runtimeToken = e.target.value.trim();
+        const val = e.target.value.trim();
+        if (val) {
+          this.plugin.tokenStore.set(agent.id, val);
+        } else {
+          this.plugin.tokenStore.delete(agent.id);
+        }
       });
     });
-    new import_obsidian2.Setting(containerEl).setName("Agent Name").setDesc("Display name for your AI agent").addText(
-      (text) => text.setPlaceholder("Agent").setValue(this.plugin.settings.agentName).onChange(async (value) => {
-        this.plugin.settings.agentName = value || "Agent";
+    new import_obsidian2.Setting(body).setName("Session Key").setDesc("Advanced \u2014 leave as default unless told otherwise").addText(
+      (text) => text.setPlaceholder("obsidian:main").setValue(agent.sessionKey).onChange(async (value) => {
+        agent.sessionKey = value || "obsidian:main";
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian2.Setting(containerEl).setName("Session Key").setDesc("Gateway session key (advanced \u2014 leave as default unless told otherwise)").addText(
-      (text) => text.setPlaceholder("obsidian:main").setValue(this.plugin.settings.sessionKey).onChange(async (value) => {
-        this.plugin.settings.sessionKey = value || "obsidian:main";
+    new import_obsidian2.Setting(body).setName("Enabled").setDesc("Show this agent in chat tabs").addToggle(
+      (toggle) => toggle.setValue(agent.enabled).onChange(async (value) => {
+        agent.enabled = value;
         await this.plugin.saveSettings();
+        if (!value) {
+          this.plugin.gatewayManager.disconnectAgent(agent.id);
+        }
+        this.plugin.refreshChatView();
       })
     );
-    new import_obsidian2.Setting(containerEl).setName("Test Connection").setDesc("Verify your gateway URL and token are working").addButton(
-      (btn) => btn.setButtonText("Test").setCta().onClick(async () => {
-        const url = this.plugin.settings.gatewayUrl;
-        const token = this.plugin.runtimeToken;
-        if (!url) {
-          new import_obsidian2.Notice("Enter a Gateway URL first.");
-          return;
-        }
-        if (!token) {
-          new import_obsidian2.Notice("Enter a Gateway Token first.");
-          return;
-        }
-        btn.setButtonText("Testing\u2026");
-        btn.setDisabled(true);
-        try {
-          const result = await this.gateway.testConnection(url, token);
-          new import_obsidian2.Notice(`\u2705 ${result}`);
-          this.plugin.connectGateway();
-        } catch (e) {
-          new import_obsidian2.Notice(`\u274C ${e.message}`);
-        } finally {
-          btn.setButtonText("Test");
-          btn.setDisabled(false);
-        }
-      })
-    );
-    const status = containerEl.createDiv({ cls: "oc-status" });
-    const connected = this.gateway.isConnected();
-    status.setText(connected ? "\u25CF Connected to gateway" : "\u25CB Not connected");
-    status.style.color = connected ? "var(--color-green)" : "var(--text-muted)";
-    status.style.marginTop = "12px";
-    status.style.fontSize = "0.85em";
+    const actions = body.createDiv({ cls: "oc-agent-actions" });
+    const testBtn = actions.createEl("button", {
+      cls: "mod-cta",
+      text: "Test Connection"
+    });
+    testBtn.addEventListener("click", async () => {
+      const url = agent.gatewayUrl;
+      const token = this.plugin.tokenStore.get(agent.id);
+      if (!url) {
+        new import_obsidian2.Notice("Enter a Gateway URL first.");
+        return;
+      }
+      if (!token) {
+        new import_obsidian2.Notice("Enter a Gateway Token first.");
+        return;
+      }
+      testBtn.setText("Testing\u2026");
+      testBtn.disabled = true;
+      try {
+        const client = this.plugin.gatewayManager.getClient(agent.id);
+        const result = await client.testConnection(url, token);
+        new import_obsidian2.Notice(`${agent.name || "Agent"}: ${result}`);
+        this.plugin.connectAgent(agent.id);
+        this.display();
+      } catch (e) {
+        new import_obsidian2.Notice(`${agent.name || "Agent"}: ${e.message}`);
+      } finally {
+        testBtn.setText("Test Connection");
+        testBtn.disabled = false;
+      }
+    });
+    const deleteBtn = actions.createEl("button", {
+      cls: "mod-warning",
+      text: "Delete Agent"
+    });
+    deleteBtn.addEventListener("click", async () => {
+      if (!confirm(`Delete agent "${agent.name || "Unnamed"}"? This cannot be undone.`))
+        return;
+      this.plugin.gatewayManager.removeAgent(agent.id);
+      this.plugin.tokenStore.delete(agent.id);
+      this.plugin.settings.agents = this.plugin.settings.agents.filter(
+        (a) => a.id !== agent.id
+      );
+      await this.plugin.saveSettings();
+      this.plugin.refreshChatView();
+      this.display();
+    });
+  }
+  safeHostname(url) {
+    if (!url)
+      return "No URL set";
+    try {
+      return new URL(url).hostname;
+    } catch (e) {
+      return url;
+    }
   }
 };
 
 // src/types.ts
 var DEFAULT_SETTINGS = {
-  gatewayUrl: "",
-  agentName: "Agent",
-  sessionKey: "obsidian:main"
+  agents: []
 };
 
 // main.ts
@@ -582,41 +948,94 @@ var OcChatPlugin = class extends import_obsidian3.Plugin {
   constructor() {
     super(...arguments);
     this.settings = { ...DEFAULT_SETTINGS };
-    this.gateway = new GatewayClient();
-    // Token lives in memory only — never persisted to disk
-    this.runtimeToken = "";
+    this.gatewayManager = new GatewayManager();
+    // Tokens live in memory only — never persisted to disk
+    this.tokenStore = /* @__PURE__ */ new Map();
   }
   async onload() {
     await this.loadSettings();
-    this.registerView(CHAT_VIEW_TYPE, (leaf) => new ChatView(leaf, this, this.gateway));
+    this.registerView(CHAT_VIEW_TYPE, (leaf) => new ChatView(leaf, this));
     this.addRibbonIcon("message-circle", "Open OpenClaw Chat", () => {
       this.activateChatView();
     });
     this.addCommand({
       id: "open-oc-chat",
-      name: "Open OpenClaw Chat",
+      name: "Open Chat",
       callback: () => this.activateChatView()
     });
-    this.addSettingTab(new OcChatSettingTab(this.app, this, this.gateway));
-    if (this.settings.gatewayUrl) {
-      setTimeout(() => this.connectGateway(), 1e3);
-    }
-    console.log("OpenClaw Chat loaded");
+    this.registerAgentCommands();
+    this.addSettingTab(new OcChatSettingTab(this.app, this));
+    this.registerEvent(
+      this.app.workspace.on("file-menu", (menu, file) => {
+        if (!(file instanceof import_obsidian3.TFile) || file.extension !== "md")
+          return;
+        menu.addItem((item) => {
+          item.setTitle("Ask Agent about this note").setIcon("message-circle").onClick(async () => {
+            await this.askAgentAboutNote(file);
+          });
+        });
+      })
+    );
+    setTimeout(() => this.autoConnectAgents(), 1e3);
+    console.log("OpenClaw Chat v2 loaded");
   }
   async onunload() {
-    this.gateway.disconnect();
-    console.log("OpenClaw Chat unloaded");
+    this.gatewayManager.disconnectAll();
+    console.log("OpenClaw Chat v2 unloaded");
   }
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const data = await this.loadData();
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, data);
+    if (!Array.isArray(this.settings.agents)) {
+      this.settings.agents = [];
+    }
   }
   async saveSettings() {
     await this.saveData(this.settings);
   }
-  connectGateway() {
-    if (!this.settings.gatewayUrl || !this.runtimeToken)
+  connectAgent(agentId) {
+    const agent = this.settings.agents.find((a) => a.id === agentId);
+    if (!agent)
       return;
-    this.gateway.connect(this.settings.gatewayUrl, this.runtimeToken);
+    const token = this.tokenStore.get(agentId);
+    if (!agent.gatewayUrl || !token)
+      return;
+    this.gatewayManager.connectAgent(agentId, agent.gatewayUrl, token);
+  }
+  autoConnectAgents() {
+    for (const agent of this.settings.agents) {
+      if (agent.enabled && agent.gatewayUrl && this.tokenStore.has(agent.id)) {
+        this.connectAgent(agent.id);
+      }
+    }
+  }
+  registerAgentCommands() {
+    for (const agent of this.settings.agents) {
+      if (!agent.enabled || !agent.name)
+        continue;
+      this.addCommand({
+        id: `switch-agent-${agent.id}`,
+        name: `Switch to Agent: ${agent.name}`,
+        callback: async () => {
+          await this.activateChatView();
+          const view = this.getChatView();
+          if (view)
+            view.switchToAgent(agent.id);
+        }
+      });
+    }
+  }
+  refreshChatView() {
+    const view = this.getChatView();
+    if (view)
+      view.refresh();
+  }
+  getChatView() {
+    const leaves = this.app.workspace.getLeavesOfType(CHAT_VIEW_TYPE);
+    if (leaves.length > 0) {
+      return leaves[0].view;
+    }
+    return null;
   }
   async activateChatView() {
     const { workspace } = this.app;
@@ -632,6 +1051,27 @@ var OcChatPlugin = class extends import_obsidian3.Plugin {
     }
     if (leaf) {
       workspace.revealLeaf(leaf);
+    }
+  }
+  async askAgentAboutNote(file) {
+    const content = await this.app.vault.cachedRead(file);
+    if (!this.getChatView()) {
+      await this.activateChatView();
+    }
+    const chatView = this.getChatView();
+    if (!chatView) {
+      new import_obsidian3.Notice("Could not open chat panel.");
+      return;
+    }
+    const message = `I'd like to discuss this note:
+
+**${file.basename}**
+
+${content}`;
+    await chatView.sendMessage(message);
+    const leaves = this.app.workspace.getLeavesOfType(CHAT_VIEW_TYPE);
+    if (leaves.length > 0) {
+      this.app.workspace.revealLeaf(leaves[0]);
     }
   }
 };

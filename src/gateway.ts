@@ -25,6 +25,14 @@ export class GatewayClient {
     this.stateListeners.push(fn);
   }
 
+  offChat(fn: Listener<ChatEventPayload>): void {
+    this.chatListeners = this.chatListeners.filter((f) => f !== fn);
+  }
+
+  offStateChange(fn: Listener<boolean>): void {
+    this.stateListeners = this.stateListeners.filter((f) => f !== fn);
+  }
+
   private emitChat(payload: ChatEventPayload): void {
     for (const fn of this.chatListeners) fn(payload);
   }
@@ -284,5 +292,47 @@ export class GatewayClient {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(frame));
     }
+  }
+}
+
+// ─── GatewayManager: manages multiple GatewayClient instances ───
+
+export class GatewayManager {
+  private clients = new Map<string, GatewayClient>();
+
+  getClient(agentId: string): GatewayClient {
+    let client = this.clients.get(agentId);
+    if (!client) {
+      client = new GatewayClient();
+      this.clients.set(agentId, client);
+    }
+    return client;
+  }
+
+  connectAgent(agentId: string, gatewayUrl: string, token: string): void {
+    const client = this.getClient(agentId);
+    client.connect(gatewayUrl, token);
+  }
+
+  disconnectAgent(agentId: string): void {
+    const client = this.clients.get(agentId);
+    if (client) {
+      client.disconnect();
+    }
+  }
+
+  disconnectAll(): void {
+    for (const [, client] of this.clients) {
+      client.disconnect();
+    }
+  }
+
+  removeAgent(agentId: string): void {
+    this.disconnectAgent(agentId);
+    this.clients.delete(agentId);
+  }
+
+  isConnected(agentId: string): boolean {
+    return this.clients.get(agentId)?.isConnected() ?? false;
   }
 }

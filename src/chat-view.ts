@@ -1,26 +1,42 @@
-import { ItemView, WorkspaceLeaf, Notice } from "obsidian";
-import type { ChatMessage } from "./types";
+import { ItemView, WorkspaceLeaf, Notice, setIcon } from "obsidian";
+import type { ChatMessage, AgentConfig, ChatEventPayload } from "./types";
 import type { GatewayClient } from "./gateway";
 import type OcChatPlugin from "../main";
 
 export const CHAT_VIEW_TYPE = "oc-chat";
 
+interface AgentChatState {
+  messages: ChatMessage[];
+  streamBuffer: string;
+  streamMsgEl: HTMLElement | null;
+  isStreaming: boolean;
+}
+
 export class ChatView extends ItemView {
   private plugin: OcChatPlugin;
-  private gateway: GatewayClient;
-  private messages: ChatMessage[] = [];
+  private activeAgentId: string | null = null;
+
+  // Per-agent chat state (in-memory)
+  private agentStates = new Map<string, AgentChatState>();
+
+  // Per-agent listener references for cleanup
+  private boundListeners = new Map<string, {
+    chat: (payload: ChatEventPayload) => void;
+    state: (connected: boolean) => void;
+  }>();
+
+  // DOM refs
+  private tabBarEl: HTMLElement | null = null;
+  private chatAreaEl: HTMLElement | null = null;
   private messagesEl: HTMLElement | null = null;
   private inputEl: HTMLTextAreaElement | null = null;
   private sendBtn: HTMLButtonElement | null = null;
   private statusEl: HTMLElement | null = null;
-  private streamBuffer: string = "";
-  private streamMsgEl: HTMLElement | null = null;
-  private isStreaming: boolean = false;
+  private emptyStateEl: HTMLElement | null = null;
 
-  constructor(leaf: WorkspaceLeaf, plugin: OcChatPlugin, gateway: GatewayClient) {
+  constructor(leaf: WorkspaceLeaf, plugin: OcChatPlugin) {
     super(leaf);
     this.plugin = plugin;
-    this.gateway = gateway;
   }
 
   getViewType(): string {
@@ -28,7 +44,7 @@ export class ChatView extends ItemView {
   }
 
   getDisplayText(): string {
-    return `${this.plugin.settings.agentName} — OpenClaw`;
+    return "OpenClaw Chat";
   }
 
   getIcon(): string {
@@ -40,42 +56,32 @@ export class ChatView extends ItemView {
     container.empty();
     container.addClass("oc-chat-container");
 
-    // Header
-    const header = container.createDiv({ cls: "oc-header" });
-    header.createEl("span", {
-      cls: "oc-header-title",
-      text: this.plugin.settings.agentName,
-    });
+    // Tab bar
+    this.tabBarEl = container.createDiv({ cls: "oc-tab-bar" });
 
-    const clearBtn = header.createEl("button", {
-      cls: "oc-clear-btn",
-      text: "Clear",
-    });
-    clearBtn.addEventListener("click", () => this.clearMessages());
+    // Chat area (messages + input) — hidden until agent selected
+    this.chatAreaEl = container.createDiv({ cls: "oc-chat-area" });
 
-    // Status bar
-    this.statusEl = container.createDiv({ cls: "oc-status-bar" });
-    this.updateStatus();
+    // Status bar with clear button
+    const statusRow = this.chatAreaEl.createDiv({ cls: "oc-status-row" });
+    this.statusEl = statusRow.createSpan({ cls: "oc-status-bar disconnected" });
+    this.statusEl.setText("○ Disconnected");
+    const clearBtn = statusRow.createEl("button", { cls: "oc-clear-btn", text: "Clear" });
+    clearBtn.addEventListener("click", () => this.clearActiveChat());
 
     // Messages area
-    this.messagesEl = container.createDiv({ cls: "oc-messages" });
+    this.messagesEl = this.chatAreaEl.createDiv({ cls: "oc-messages" });
 
-    // Render existing messages
-    for (const msg of this.messages) {
-      this.renderMessage(msg);
-    }
-    this.scrollToBottom();
-
-    // Token warning if not set
-    if (!this.plugin.runtimeToken) {
-      this.showTokenWarning();
-    }
+    // Empty state (shown when no agents)
+    this.emptyStateEl = container.createDiv({ cls: "oc-empty-state" });
 
     // Input area
-    const inputArea = container.createDiv({ cls: "oc-input-area" });
-    this.inputEl = inputArea.createEl("textarea", {
+    const inputArea = this.chatAreaEl.createDiv({ cls: "oc-input-area" });
+    const inputRow = inputArea.createDiv({ cls: "oc-input-row" });
+
+    this.inputEl = inputRow.createEl("textarea", {
       cls: "oc-input",
-      attr: { placeholder: `Message ${this.plugin.settings.agentName}…`, rows: "3" },
+      attr: { placeholder: "Message…", rows: "2" },
     });
 
     this.inputEl.addEventListener("keydown", (e) => {
@@ -85,136 +91,378 @@ export class ChatView extends ItemView {
       }
     });
 
-    this.sendBtn = inputArea.createEl("button", {
-      cls: "oc-send-btn",
-      text: "Send",
-    });
+    this.sendBtn = inputRow.createEl("button", { cls: "oc-send-btn" });
+    setIcon(this.sendBtn, "send");
+    this.sendBtn.setAttribute("aria-label", "Send");
     this.sendBtn.addEventListener("click", () => this.handleSend());
 
-    // Listen for gateway events
-    this.gateway.onChat((payload) => {
-      if (payload.state === "error") {
-        this.finishStream();
-        this.addMessage({ role: "assistant", content: `Error: ${payload.errorMessage ?? "Unknown error"}`, timestamp: Date.now() });
-        this.setInputDisabled(false);
-        return;
-      }
-      if (payload.state === "delta" && payload.message) {
-        const text = payload.message.content
-          .filter((c) => c.type === "text")
-          .map((c) => c.text)
-          .join("");
-        this.replaceStream(text);
-      }
-      if (payload.state === "final") {
-        if (payload.message) {
-          const text = payload.message.content
-            .filter((c) => c.type === "text")
-            .map((c) => c.text)
-            .join("");
-          this.replaceStream(text);
-        }
-        this.finishStream();
-        this.setInputDisabled(false);
-      }
-    });
+    // Build tabs and bind listeners
+    this.buildTabs();
+    this.bindAllAgentListeners();
 
-    this.gateway.onStateChange((connected) => {
-      this.updateStatus();
-      if (!connected && this.isStreaming) {
-        this.finishStream();
-        this.setInputDisabled(false);
-      }
-    });
+    // Select first enabled agent
+    const enabled = this.plugin.settings.agents.filter((a) => a.enabled);
+    if (enabled.length > 0) {
+      this.switchToAgent(enabled[0].id);
+    } else {
+      this.showEmptyState();
+    }
   }
 
-  private showTokenWarning(): void {
-    if (!this.messagesEl) return;
-    const warn = this.messagesEl.createDiv({ cls: "oc-token-warning" });
-    warn.innerHTML = `⚠️ Gateway token not set. <a class="oc-settings-link">Open Settings</a> to enter your token.`;
-    warn.querySelector(".oc-settings-link")?.addEventListener("click", () => {
+  /** Called by plugin when agent list changes */
+  refresh(): void {
+    this.unbindAllAgentListeners();
+    this.buildTabs();
+    this.bindAllAgentListeners();
+
+    const enabled = this.plugin.settings.agents.filter((a) => a.enabled);
+    if (enabled.length === 0) {
+      this.activeAgentId = null;
+      this.showEmptyState();
+    } else if (!this.activeAgentId || !enabled.find((a) => a.id === this.activeAgentId)) {
+      this.switchToAgent(enabled[0].id);
+    } else {
+      this.switchToAgent(this.activeAgentId);
+    }
+  }
+
+  switchToAgent(agentId: string): void {
+    this.activeAgentId = agentId;
+    const agent = this.plugin.settings.agents.find((a) => a.id === agentId);
+    if (!agent) return;
+
+    // Hide empty state, show chat
+    if (this.emptyStateEl) this.emptyStateEl.style.display = "none";
+    if (this.chatAreaEl) this.chatAreaEl.style.display = "flex";
+
+    // Update active tab
+    this.tabBarEl?.querySelectorAll(".oc-tab").forEach((tab) => {
+      tab.toggleClass("active", tab.getAttribute("data-agent-id") === agentId);
+    });
+
+    // Update input placeholder
+    if (this.inputEl) {
+      this.inputEl.placeholder = `Message ${agent.name || "Agent"}…`;
+    }
+
+    // Render messages
+    this.renderMessages();
+    this.updateStatus();
+
+    // Show token warning if needed
+    const hasToken = this.plugin.tokenStore.has(agentId);
+    const connected = this.plugin.gatewayManager.isConnected(agentId);
+    if (!hasToken && !connected) {
+      this.showInlineWarning("Token not set — open Settings to enter your gateway token.");
+    }
+  }
+
+  // ─── Tab bar ───
+
+  private buildTabs(): void {
+    if (!this.tabBarEl) return;
+    this.tabBarEl.empty();
+
+    const enabled = this.plugin.settings.agents.filter((a) => a.enabled);
+
+    for (const agent of enabled) {
+      const tab = this.tabBarEl.createDiv({
+        cls: "oc-tab",
+        attr: { "data-agent-id": agent.id },
+      });
+
+      const connected = this.plugin.gatewayManager.isConnected(agent.id);
+      tab.createSpan({ cls: `oc-tab-dot ${connected ? "connected" : "disconnected"}` });
+      tab.createSpan({ cls: "oc-tab-name", text: agent.name || "Agent" });
+
+      tab.addEventListener("click", () => this.switchToAgent(agent.id));
+
+      if (agent.id === this.activeAgentId) {
+        tab.addClass("active");
+      }
+    }
+
+    // "+" tab opens settings
+    const addTab = this.tabBarEl.createDiv({ cls: "oc-tab oc-tab-add" });
+    addTab.createSpan({ text: "+" });
+    addTab.addEventListener("click", () => {
       (this.app as unknown as { setting: { open: () => void; openTabById: (id: string) => void } }).setting.open();
       (this.app as unknown as { setting: { open: () => void; openTabById: (id: string) => void } }).setting.openTabById("openclaw-chat");
     });
   }
 
-  private updateStatus(): void {
-    if (!this.statusEl) return;
-    const connected = this.gateway.isConnected();
-    this.statusEl.setText(connected ? "● Connected" : "○ Disconnected");
-    this.statusEl.className = `oc-status-bar ${connected ? "connected" : "disconnected"}`;
+  // ─── Listener management ───
+
+  private bindAllAgentListeners(): void {
+    for (const agent of this.plugin.settings.agents) {
+      if (!agent.enabled) continue;
+      this.bindAgentListeners(agent);
+    }
   }
 
-  private renderMessage(msg: ChatMessage): void {
+  private bindAgentListeners(agent: AgentConfig): void {
+    if (this.boundListeners.has(agent.id)) return;
+    const client = this.plugin.gatewayManager.getClient(agent.id);
+
+    const chatListener = (payload: ChatEventPayload) => {
+      this.handleChatEvent(agent.id, payload);
+    };
+
+    const stateListener = (connected: boolean) => {
+      this.handleStateChange(agent.id, connected);
+    };
+
+    client.onChat(chatListener);
+    client.onStateChange(stateListener);
+    this.boundListeners.set(agent.id, { chat: chatListener, state: stateListener });
+  }
+
+  private unbindAllAgentListeners(): void {
+    for (const [agentId, listeners] of this.boundListeners) {
+      const client = this.plugin.gatewayManager.getClient(agentId);
+      client.offChat(listeners.chat);
+      client.offStateChange(listeners.state);
+    }
+    this.boundListeners.clear();
+  }
+
+  // ─── Event handlers ───
+
+  private handleChatEvent(agentId: string, payload: ChatEventPayload): void {
+    const state = this.getAgentState(agentId);
+
+    if (payload.state === "error") {
+      this.finishStream(agentId);
+      state.messages.push({
+        role: "assistant",
+        content: `Error: ${payload.errorMessage ?? "Unknown error"}`,
+        timestamp: Date.now(),
+      });
+      if (agentId === this.activeAgentId) {
+        this.renderMessages();
+        this.setInputDisabled(false);
+      }
+      return;
+    }
+
+    if (payload.state === "delta" && payload.message) {
+      const text = payload.message.content
+        .filter((c) => c.type === "text")
+        .map((c) => c.text)
+        .join("");
+      this.replaceStream(agentId, text);
+    }
+
+    if (payload.state === "final") {
+      if (payload.message) {
+        const text = payload.message.content
+          .filter((c) => c.type === "text")
+          .map((c) => c.text)
+          .join("");
+        this.replaceStream(agentId, text);
+      }
+      this.finishStream(agentId);
+      if (agentId === this.activeAgentId) {
+        this.setInputDisabled(false);
+      }
+    }
+  }
+
+  private handleStateChange(agentId: string, connected: boolean): void {
+    // Update tab dot
+    const tab = this.tabBarEl?.querySelector(`[data-agent-id="${agentId}"]`);
+    const dot = tab?.querySelector(".oc-tab-dot");
+    if (dot) {
+      dot.className = `oc-tab-dot ${connected ? "connected" : "disconnected"}`;
+    }
+
+    if (agentId === this.activeAgentId) {
+      this.updateStatus();
+      if (!connected) {
+        const state = this.getAgentState(agentId);
+        if (state.isStreaming) {
+          this.finishStream(agentId);
+          this.setInputDisabled(false);
+        }
+      }
+    }
+  }
+
+  // ─── Streaming ───
+
+  private replaceStream(agentId: string, fullText: string): void {
+    const state = this.getAgentState(agentId);
+
+    if (!state.isStreaming) {
+      state.isStreaming = true;
+      state.streamBuffer = "";
+      state.streamMsgEl = null;
+    }
+
+    state.streamBuffer = fullText;
+
+    // Only render if this is the active agent
+    if (agentId === this.activeAgentId && this.messagesEl) {
+      if (!state.streamMsgEl) {
+        const agent = this.plugin.settings.agents.find((a) => a.id === agentId);
+        const el = this.messagesEl.createDiv({
+          cls: "oc-message oc-message-assistant oc-streaming",
+        });
+        el.createDiv({ cls: "oc-agent-label", text: agent?.name || "Agent" });
+        state.streamMsgEl = el.createDiv({ cls: "oc-bubble" });
+      }
+      state.streamMsgEl.setText(state.streamBuffer);
+      this.scrollToBottom();
+    }
+  }
+
+  private finishStream(agentId: string): void {
+    const state = this.getAgentState(agentId);
+    if (!state.isStreaming) return;
+
+    state.isStreaming = false;
+    if (state.streamBuffer) {
+      state.messages.push({
+        role: "assistant",
+        content: state.streamBuffer,
+        timestamp: Date.now(),
+      });
+    }
+    state.streamBuffer = "";
+    state.streamMsgEl = null;
+
+    if (agentId === this.activeAgentId) {
+      this.renderMessages();
+    }
+  }
+
+  // ─── Rendering ───
+
+  private renderMessages(): void {
+    if (!this.messagesEl || !this.activeAgentId) return;
+    this.messagesEl.empty();
+
+    const state = this.getAgentState(this.activeAgentId);
+    const agent = this.plugin.settings.agents.find((a) => a.id === this.activeAgentId);
+
+    for (const msg of state.messages) {
+      this.renderMessage(msg, agent);
+    }
+
+    // Re-render active stream if any
+    if (state.isStreaming && state.streamBuffer) {
+      const el = this.messagesEl.createDiv({
+        cls: "oc-message oc-message-assistant oc-streaming",
+      });
+      el.createDiv({ cls: "oc-agent-label", text: agent?.name || "Agent" });
+      state.streamMsgEl = el.createDiv({ cls: "oc-bubble" });
+      state.streamMsgEl.setText(state.streamBuffer);
+    }
+
+    this.scrollToBottom();
+  }
+
+  private renderMessage(msg: ChatMessage, agent?: AgentConfig): void {
     if (!this.messagesEl) return;
     const el = this.messagesEl.createDiv({
       cls: `oc-message oc-message-${msg.role}`,
     });
+
+    if (msg.role === "assistant") {
+      el.createDiv({ cls: "oc-agent-label", text: agent?.name || "Agent" });
+    }
+
     const bubble = el.createDiv({ cls: "oc-bubble" });
     bubble.setText(msg.content);
+
+    // Timestamp on hover
+    const ts = new Date(msg.timestamp);
+    const timeStr = ts.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    bubble.setAttribute("title", timeStr);
   }
 
-  private replaceStream(fullText: string): void {
+  private updateStatus(): void {
+    if (!this.statusEl || !this.activeAgentId) return;
+    const connected = this.plugin.gatewayManager.isConnected(this.activeAgentId);
+    this.statusEl.setText(connected ? "● Connected" : "○ Disconnected");
+    this.statusEl.className = `oc-status-bar ${connected ? "connected" : "disconnected"}`;
+  }
+
+  private showEmptyState(): void {
+    if (this.chatAreaEl) this.chatAreaEl.style.display = "none";
+    if (!this.emptyStateEl) return;
+    this.emptyStateEl.style.display = "flex";
+    this.emptyStateEl.empty();
+
+    this.emptyStateEl.createDiv({ cls: "oc-empty-icon" });
+    setIcon(this.emptyStateEl.querySelector(".oc-empty-icon") as HTMLElement, "message-circle");
+    this.emptyStateEl.createDiv({
+      cls: "oc-empty-title",
+      text: "No agents configured",
+    });
+    const link = this.emptyStateEl.createEl("a", {
+      cls: "oc-empty-link",
+      text: "Open Settings to add an agent",
+    });
+    link.addEventListener("click", () => {
+      (this.app as unknown as { setting: { open: () => void; openTabById: (id: string) => void } }).setting.open();
+      (this.app as unknown as { setting: { open: () => void; openTabById: (id: string) => void } }).setting.openTabById("openclaw-chat");
+    });
+  }
+
+  private showInlineWarning(text: string): void {
     if (!this.messagesEl) return;
-    if (!this.isStreaming) {
-      this.isStreaming = true;
-      this.streamBuffer = "";
-      const el = this.messagesEl.createDiv({
-        cls: "oc-message oc-message-assistant oc-streaming",
-      });
-      this.streamMsgEl = el.createDiv({ cls: "oc-bubble" });
-    }
-    this.streamBuffer = fullText;
-    if (this.streamMsgEl) {
-      this.streamMsgEl.setText(this.streamBuffer);
-    }
-    this.scrollToBottom();
+    // Only show if no messages exist
+    const state = this.getAgentState(this.activeAgentId!);
+    if (state.messages.length > 0) return;
+
+    const warn = this.messagesEl.createDiv({ cls: "oc-token-warning" });
+    const warningText = warn.createSpan({ text: "⚠ " + text + " " });
+    const link = warningText.createEl("a", { cls: "oc-settings-link", text: "Open Settings" });
+    link.addEventListener("click", () => {
+      (this.app as unknown as { setting: { open: () => void; openTabById: (id: string) => void } }).setting.open();
+      (this.app as unknown as { setting: { open: () => void; openTabById: (id: string) => void } }).setting.openTabById("openclaw-chat");
+    });
   }
 
-  private finishStream(): void {
-    if (!this.isStreaming) return;
-    this.isStreaming = false;
-    if (this.streamBuffer) {
-      this.messages.push({
-        role: "assistant",
-        content: this.streamBuffer,
-        timestamp: Date.now(),
-      });
-    }
-    this.streamBuffer = "";
-    this.streamMsgEl = null;
-    // Remove streaming class
-    this.messagesEl?.querySelector(".oc-streaming")?.removeClass("oc-streaming");
-  }
-
-  private addMessage(msg: ChatMessage): void {
-    this.messages.push(msg);
-    this.renderMessage(msg);
-    this.scrollToBottom();
-  }
+  // ─── Input ───
 
   private async handleSend(): Promise<void> {
     const text = this.inputEl?.value?.trim();
-    if (!text) return;
+    if (!text || !this.activeAgentId) return;
 
-    if (!this.gateway.isConnected()) {
+    const agent = this.plugin.settings.agents.find((a) => a.id === this.activeAgentId);
+    if (!agent) return;
+
+    const client = this.plugin.gatewayManager.getClient(this.activeAgentId);
+
+    if (!client.isConnected()) {
       new Notice("Not connected to gateway. Check Settings.");
       return;
     }
-    if (!this.plugin.runtimeToken) {
+
+    const token = this.plugin.tokenStore.get(this.activeAgentId);
+    if (!token) {
       new Notice("Gateway token not set. Open Settings to enter it.");
       return;
     }
 
-    this.addMessage({ role: "user", content: text, timestamp: Date.now() });
+    const state = this.getAgentState(this.activeAgentId);
+    state.messages.push({ role: "user", content: text, timestamp: Date.now() });
+    this.renderMessages();
     if (this.inputEl) this.inputEl.value = "";
     this.setInputDisabled(true);
 
     try {
-      await this.gateway.sendChat(this.plugin.settings.sessionKey, text);
+      await client.sendChat(agent.sessionKey, text);
     } catch (e) {
-      this.finishStream();
-      this.addMessage({ role: "assistant", content: `Failed to send: ${(e as Error).message}`, timestamp: Date.now() });
+      this.finishStream(this.activeAgentId);
+      state.messages.push({
+        role: "assistant",
+        content: `Failed to send: ${(e as Error).message}`,
+        timestamp: Date.now(),
+      });
+      this.renderMessages();
       this.setInputDisabled(false);
     }
   }
@@ -224,23 +472,75 @@ export class ChatView extends ItemView {
     if (this.sendBtn) this.sendBtn.disabled = disabled;
   }
 
-  private clearMessages(): void {
-    this.messages = [];
-    if (this.messagesEl) {
-      this.messagesEl.empty();
-      if (!this.plugin.runtimeToken) {
-        this.showTokenWarning();
-      }
+  // ─── Agent state ───
+
+  private getAgentState(agentId: string): AgentChatState {
+    let state = this.agentStates.get(agentId);
+    if (!state) {
+      state = {
+        messages: [],
+        streamBuffer: "",
+        streamMsgEl: null,
+        isStreaming: false,
+      };
+      this.agentStates.set(agentId, state);
+    }
+    return state;
+  }
+
+  /** Send a message programmatically as the user (used by "Ask Agent about this note") */
+  async sendMessage(text: string): Promise<void> {
+    if (!this.activeAgentId) return;
+    const agent = this.plugin.settings.agents.find((a) => a.id === this.activeAgentId);
+    if (!agent) return;
+    const client = this.plugin.gatewayManager.getClient(this.activeAgentId);
+    if (!client.isConnected()) {
+      new Notice("Not connected to gateway. Check Settings.");
+      return;
+    }
+
+    const state = this.getAgentState(this.activeAgentId);
+    state.messages.push({ role: "user", content: text, timestamp: Date.now() });
+    this.renderMessages();
+    this.setInputDisabled(true);
+
+    try {
+      await client.sendChat(agent.sessionKey, text);
+    } catch (e) {
+      this.finishStream(this.activeAgentId);
+      state.messages.push({
+        role: "assistant",
+        content: `Failed to send: ${(e as Error).message}`,
+        timestamp: Date.now(),
+      });
+      this.renderMessages();
+      this.setInputDisabled(false);
     }
   }
 
+  clearActiveChat(): void {
+    if (!this.activeAgentId) return;
+    const state = this.getAgentState(this.activeAgentId);
+    state.messages = [];
+    state.streamBuffer = "";
+    state.streamMsgEl = null;
+    state.isStreaming = false;
+    this.renderMessages();
+  }
+
+  // ─── Utils ───
+
   private scrollToBottom(): void {
     if (this.messagesEl) {
-      this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+      requestAnimationFrame(() => {
+        if (this.messagesEl) {
+          this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+        }
+      });
     }
   }
 
   async onClose(): Promise<void> {
-    // nothing to clean up
+    this.unbindAllAgentListeners();
   }
 }

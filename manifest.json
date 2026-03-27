@@ -1,10 +1,9 @@
 {
   "id": "openclaw-chat",
   "name": "OpenClaw Chat",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "minAppVersion": "1.0.0",
-  "description": "Chat with your your OpenClaw AI agent from inside Obsidian.",
+  "description": "Chat with your OpenClaw AI agents from inside Obsidian. Multi-agent support with tabbed chat.",
   "author": "OpenClaw",
-  "authorUrl": "https://advicareinsurance.com",
   "isDesktopOnly": false
 }

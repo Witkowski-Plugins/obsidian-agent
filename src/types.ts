@@ -1,13 +1,17 @@
-export interface OcChatSettings {
+export interface AgentConfig {
+  id: string;
+  name: string;
   gatewayUrl: string;
-  agentName: string;
   sessionKey: string;
+  enabled: boolean;
+}
+
+export interface OcChatSettings {
+  agents: AgentConfig[];
 }
 
 export const DEFAULT_SETTINGS: OcChatSettings = {
-  gatewayUrl: "",
-  agentName: "Agent",
-  sessionKey: "obsidian:main",
+  agents: [],
 };
 
 export interface ChatMessage {
