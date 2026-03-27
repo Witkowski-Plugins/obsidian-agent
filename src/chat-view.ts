@@ -239,6 +239,12 @@ export class ChatView extends ItemView {
   private handleChatEvent(agentId: string, payload: ChatEventPayload): void {
     const state = this.getAgentState(agentId);
 
+    // Only process events for our session — ignore events from other sessions (Telegram, cron, etc.)
+    const agent = this.plugin.settings.agents.find((a) => a.id === agentId);
+    if (agent && payload.sessionKey && !payload.sessionKey.endsWith(agent.sessionKey)) {
+      return;
+    }
+
     // Filter out heartbeat responses
     if (payload.state === "final" && payload.message) {
       const text = payload.message.content

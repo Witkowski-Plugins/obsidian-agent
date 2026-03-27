@@ -497,6 +497,10 @@ var ChatView = class extends import_obsidian.ItemView {
   handleChatEvent(agentId, payload) {
     var _a;
     const state = this.getAgentState(agentId);
+    const agent = this.plugin.settings.agents.find((a) => a.id === agentId);
+    if (agent && payload.sessionKey && !payload.sessionKey.endsWith(agent.sessionKey)) {
+      return;
+    }
     if (payload.state === "final" && payload.message) {
       const text = payload.message.content.filter((c) => c.type === "text").map((c) => c.text).join("").trim();
       if (text === "HEARTBEAT_OK" || text === "OK" || text === "NO_REPLY") {
