@@ -39,7 +39,7 @@ export class GatewayClient {
   }
 
   private nextId(): string {
-    return `advisecare-${++this.counter}-${Date.now()}`;
+    return `oc-${++this.counter}-${Date.now()}`;
   }
 
   private toWsUrl(url: string): string {
@@ -56,14 +56,14 @@ export class GatewayClient {
 
     const wsUrl = this.toWsUrl(gatewayUrl);
     if (!wsUrl) {
-      console.error("[AdviseCare] No gateway URL configured");
+      console.error("[OpenClaw] No gateway URL configured");
       return;
     }
 
     try {
       this.ws = new WebSocket(wsUrl);
     } catch (e) {
-      console.error("[AdviseCare] WebSocket init error:", e);
+      console.error("[OpenClaw] WebSocket init error:", e);
       return;
     }
 
@@ -165,16 +165,16 @@ export class GatewayClient {
         if (res.ok) {
           this.emitState(true);
         } else {
-          console.error("[AdviseCare] Connect rejected:", res.error);
+          console.error("[OpenClaw] Connect rejected:", res.error);
           this.emitState(false);
         }
       },
       reject: (err) => {
-        console.error("[AdviseCare] Connect failed:", err);
+        console.error("[OpenClaw] Connect failed:", err);
       },
       timer: setTimeout(() => {
         this.pendingRequests.delete(id);
-        console.error("[AdviseCare] Connect timed out");
+        console.error("[OpenClaw] Connect timed out");
       }, 10000),
     });
   }

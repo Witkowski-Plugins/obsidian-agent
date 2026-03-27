@@ -1,13 +1,13 @@
 import { App, Notice, PluginSettingTab, Setting } from "obsidian";
-import type AdviseCarePlugin from "../main";
+import type OcChatPlugin from "../main";
 import type { GatewayClient } from "./gateway";
 
-export class AdviseCareSettingTab extends PluginSettingTab {
-  private plugin: AdviseCarePlugin;
+export class OcChatSettingTab extends PluginSettingTab {
+  private plugin: OcChatPlugin;
   private gateway: GatewayClient;
   private tokenField: HTMLInputElement | null = null;
 
-  constructor(app: App, plugin: AdviseCarePlugin, gateway: GatewayClient) {
+  constructor(app: App, plugin: OcChatPlugin, gateway: GatewayClient) {
     super(app, plugin);
     this.plugin = plugin;
     this.gateway = gateway;
@@ -17,7 +17,7 @@ export class AdviseCareSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl("h2", { text: "AdviseCare Agent Settings" });
+    containerEl.createEl("h2", { text: "OpenClaw Chat Settings" });
 
     // Gateway URL
     new Setting(containerEl)
@@ -56,10 +56,10 @@ export class AdviseCareSettingTab extends PluginSettingTab {
       .setDesc("Display name for your AI agent")
       .addText((text) =>
         text
-          .setPlaceholder("Max")
+          .setPlaceholder("Agent")
           .setValue(this.plugin.settings.agentName)
           .onChange(async (value) => {
-            this.plugin.settings.agentName = value || "Max";
+            this.plugin.settings.agentName = value || "Agent";
             await this.plugin.saveSettings();
           })
       );
@@ -117,7 +117,7 @@ export class AdviseCareSettingTab extends PluginSettingTab {
       );
 
     // Status
-    const status = containerEl.createDiv({ cls: "advisecare-status" });
+    const status = containerEl.createDiv({ cls: "oc-status" });
     const connected = this.gateway.isConnected();
     status.setText(connected ? "● Connected to gateway" : "○ Not connected");
     status.style.color = connected ? "var(--color-green)" : "var(--text-muted)";

@@ -1,10 +1,10 @@
 {
-  "id": "advisecare-agent",
-  "name": "AdviseCare Agent",
+  "id": "openclaw-chat",
+  "name": "OpenClaw Chat",
   "version": "1.0.0",
   "minAppVersion": "1.0.0",
-  "description": "Chat with your AdviseCare OpenClaw AI agent from inside Obsidian.",
-  "author": "AdviseCare",
+  "description": "Chat with your your OpenClaw AI agent from inside Obsidian.",
+  "author": "OpenClaw",
   "authorUrl": "https://advicareinsurance.com",
   "isDesktopOnly": false
 }

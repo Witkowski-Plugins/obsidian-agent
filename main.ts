@@ -1,12 +1,12 @@
 import { Plugin, WorkspaceLeaf } from "obsidian";
 import { GatewayClient } from "./src/gateway";
 import { ChatView, CHAT_VIEW_TYPE } from "./src/chat-view";
-import { AdviseCareSettingTab } from "./src/settings";
+import { OcChatSettingTab } from "./src/settings";
 import { DEFAULT_SETTINGS } from "./src/types";
-import type { AdviseCareSettings } from "./src/types";
+import type { OcChatSettings } from "./src/types";
 
-export default class AdviseCarePlugin extends Plugin {
-  settings: AdviseCareSettings = { ...DEFAULT_SETTINGS };
+export default class OcChatPlugin extends Plugin {
+  settings: OcChatSettings = { ...DEFAULT_SETTINGS };
   gateway: GatewayClient = new GatewayClient();
 
   // Token lives in memory only — never persisted to disk
@@ -19,19 +19,19 @@ export default class AdviseCarePlugin extends Plugin {
     this.registerView(CHAT_VIEW_TYPE, (leaf) => new ChatView(leaf, this, this.gateway));
 
     // Ribbon icon
-    this.addRibbonIcon("message-circle", "Open AdviseCare Chat", () => {
+    this.addRibbonIcon("message-circle", "Open OpenClaw Chat", () => {
       this.activateChatView();
     });
 
     // Command
     this.addCommand({
-      id: "open-advisecare-chat",
-      name: "Open AdviseCare Chat",
+      id: "open-oc-chat",
+      name: "Open OpenClaw Chat",
       callback: () => this.activateChatView(),
     });
 
     // Settings tab
-    this.addSettingTab(new AdviseCareSettingTab(this.app, this, this.gateway));
+    this.addSettingTab(new OcChatSettingTab(this.app, this, this.gateway));
 
     // Auto-connect if URL is set (token will be empty until user enters it)
     if (this.settings.gatewayUrl) {
@@ -39,12 +39,12 @@ export default class AdviseCarePlugin extends Plugin {
       setTimeout(() => this.connectGateway(), 1000);
     }
 
-    console.log("AdviseCare Agent loaded");
+    console.log("OpenClaw Chat loaded");
   }
 
   async onunload(): Promise<void> {
     this.gateway.disconnect();
-    console.log("AdviseCare Agent unloaded");
+    console.log("OpenClaw Chat unloaded");
   }
 
   async loadSettings(): Promise<void> {

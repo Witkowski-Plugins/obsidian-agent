@@ -1,6 +1,6 @@
-# AdviseCare Agent — Obsidian Plugin
+# OpenClaw Chat — Obsidian Plugin
 
-Chat with your AdviseCare OpenClaw AI agent directly from inside Obsidian.
+Chat with your your OpenClaw AI agent directly from inside Obsidian.
 
 ## Features
 
@@ -25,7 +25,7 @@ Chat with your AdviseCare OpenClaw AI agent directly from inside Obsidian.
 
 ## Setup
 
-1. Open Settings → **AdviseCare Agent**
+1. Open Settings → **OpenClaw Chat**
 2. Enter your **Gateway URL** (e.g. `https://your-machine.your-tailnet.ts.net`)
 3. Enter your **Gateway Token** (re-required after each Obsidian restart)
 4. Click **Test Connection** to verify
@@ -33,7 +33,7 @@ Chat with your AdviseCare OpenClaw AI agent directly from inside Obsidian.
 
 ## Usage
 
-- Open the chat panel via the ribbon icon or command palette (`Open AdviseCare Chat`)
+- Open the chat panel via the ribbon icon or command palette (`Open OpenClaw Chat`)
 - Type your message and press **Enter** (or Shift+Enter for new line)
 - Agent responses stream in real time
 - Click **Clear** to reset the conversation
@@ -51,4 +51,4 @@ npm install
 npm run build
 ```
 
-Copy `main.js`, `manifest.json`, and `styles.css` to your vault's `.obsidian/plugins/advisecare-agent/` folder.
+Copy `main.js`, `manifest.json`, and `styles.css` to your vault's `.obsidian/plugins/openclaw-chat/` folder.

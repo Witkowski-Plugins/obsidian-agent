@@ -24,7 +24,7 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 // main.ts
 var main_exports = {};
 __export(main_exports, {
-  default: () => AdviseCarePlugin
+  default: () => OcChatPlugin
 });
 module.exports = __toCommonJS(main_exports);
 var import_obsidian3 = require("obsidian");
@@ -60,7 +60,7 @@ var GatewayClient = class {
     return this.connected;
   }
   nextId() {
-    return `advisecare-${++this.counter}-${Date.now()}`;
+    return `oc-${++this.counter}-${Date.now()}`;
   }
   toWsUrl(url) {
     return url.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://").replace(/\/+$/, "");
@@ -71,13 +71,13 @@ var GatewayClient = class {
     this.token = token;
     const wsUrl = this.toWsUrl(gatewayUrl);
     if (!wsUrl) {
-      console.error("[AdviseCare] No gateway URL configured");
+      console.error("[OpenClaw] No gateway URL configured");
       return;
     }
     try {
       this.ws = new WebSocket(wsUrl);
     } catch (e) {
-      console.error("[AdviseCare] WebSocket init error:", e);
+      console.error("[OpenClaw] WebSocket init error:", e);
       return;
     }
     this.ws.onopen = () => {
@@ -167,16 +167,16 @@ var GatewayClient = class {
         if (res.ok) {
           this.emitState(true);
         } else {
-          console.error("[AdviseCare] Connect rejected:", res.error);
+          console.error("[OpenClaw] Connect rejected:", res.error);
           this.emitState(false);
         }
       },
       reject: (err) => {
-        console.error("[AdviseCare] Connect failed:", err);
+        console.error("[OpenClaw] Connect failed:", err);
       },
       timer: setTimeout(() => {
         this.pendingRequests.delete(id);
-        console.error("[AdviseCare] Connect timed out");
+        console.error("[OpenClaw] Connect timed out");
       }, 1e4)
     });
   }
@@ -289,7 +289,7 @@ var GatewayClient = class {
 
 // src/chat-view.ts
 var import_obsidian = require("obsidian");
-var CHAT_VIEW_TYPE = "advisecare-chat";
+var CHAT_VIEW_TYPE = "oc-chat";
 var ChatView = class extends import_obsidian.ItemView {
   constructor(leaf, plugin, gateway) {
     super(leaf);
@@ -308,7 +308,7 @@ var ChatView = class extends import_obsidian.ItemView {
     return CHAT_VIEW_TYPE;
   }
   getDisplayText() {
-    return `${this.plugin.settings.agentName} \u2014 AdviseCare`;
+    return `${this.plugin.settings.agentName} \u2014 OpenClaw`;
   }
   getIcon() {
     return "message-circle";
@@ -316,20 +316,20 @@ var ChatView = class extends import_obsidian.ItemView {
   async onOpen() {
     const container = this.containerEl.children[1];
     container.empty();
-    container.addClass("advisecare-chat-container");
-    const header = container.createDiv({ cls: "advisecare-header" });
+    container.addClass("oc-chat-container");
+    const header = container.createDiv({ cls: "oc-header" });
     header.createEl("span", {
-      cls: "advisecare-header-title",
+      cls: "oc-header-title",
       text: this.plugin.settings.agentName
     });
     const clearBtn = header.createEl("button", {
-      cls: "advisecare-clear-btn",
+      cls: "oc-clear-btn",
       text: "Clear"
     });
     clearBtn.addEventListener("click", () => this.clearMessages());
-    this.statusEl = container.createDiv({ cls: "advisecare-status-bar" });
+    this.statusEl = container.createDiv({ cls: "oc-status-bar" });
     this.updateStatus();
-    this.messagesEl = container.createDiv({ cls: "advisecare-messages" });
+    this.messagesEl = container.createDiv({ cls: "oc-messages" });
     for (const msg of this.messages) {
       this.renderMessage(msg);
     }
@@ -337,9 +337,9 @@ var ChatView = class extends import_obsidian.ItemView {
     if (!this.plugin.runtimeToken) {
       this.showTokenWarning();
     }
-    const inputArea = container.createDiv({ cls: "advisecare-input-area" });
+    const inputArea = container.createDiv({ cls: "oc-input-area" });
     this.inputEl = inputArea.createEl("textarea", {
-      cls: "advisecare-input",
+      cls: "oc-input",
       attr: { placeholder: `Message ${this.plugin.settings.agentName}\u2026`, rows: "3" }
     });
     this.inputEl.addEventListener("keydown", (e) => {
@@ -349,7 +349,7 @@ var ChatView = class extends import_obsidian.ItemView {
       }
     });
     this.sendBtn = inputArea.createEl("button", {
-      cls: "advisecare-send-btn",
+      cls: "oc-send-btn",
       text: "Send"
     });
     this.sendBtn.addEventListener("click", () => this.handleSend());
@@ -380,11 +380,11 @@ var ChatView = class extends import_obsidian.ItemView {
     var _a;
     if (!this.messagesEl)
       return;
-    const warn = this.messagesEl.createDiv({ cls: "advisecare-token-warning" });
-    warn.innerHTML = `\u26A0\uFE0F Gateway token not set. <a class="advisecare-settings-link">Open Settings</a> to enter your token.`;
-    (_a = warn.querySelector(".advisecare-settings-link")) == null ? void 0 : _a.addEventListener("click", () => {
+    const warn = this.messagesEl.createDiv({ cls: "oc-token-warning" });
+    warn.innerHTML = `\u26A0\uFE0F Gateway token not set. <a class="oc-settings-link">Open Settings</a> to enter your token.`;
+    (_a = warn.querySelector(".oc-settings-link")) == null ? void 0 : _a.addEventListener("click", () => {
       this.app.setting.open();
-      this.app.setting.openTabById("advisecare-agent");
+      this.app.setting.openTabById("openclaw-chat");
     });
   }
   updateStatus() {
@@ -392,15 +392,15 @@ var ChatView = class extends import_obsidian.ItemView {
       return;
     const connected = this.gateway.isConnected();
     this.statusEl.setText(connected ? "\u25CF Connected" : "\u25CB Disconnected");
-    this.statusEl.className = `advisecare-status-bar ${connected ? "connected" : "disconnected"}`;
+    this.statusEl.className = `oc-status-bar ${connected ? "connected" : "disconnected"}`;
   }
   renderMessage(msg) {
     if (!this.messagesEl)
       return;
     const el = this.messagesEl.createDiv({
-      cls: `advisecare-message advisecare-message-${msg.role}`
+      cls: `oc-message oc-message-${msg.role}`
     });
-    const bubble = el.createDiv({ cls: "advisecare-bubble" });
+    const bubble = el.createDiv({ cls: "oc-bubble" });
     bubble.setText(msg.content);
   }
   appendStream(delta) {
@@ -410,9 +410,9 @@ var ChatView = class extends import_obsidian.ItemView {
       this.isStreaming = true;
       this.streamBuffer = "";
       const el = this.messagesEl.createDiv({
-        cls: "advisecare-message advisecare-message-assistant advisecare-streaming"
+        cls: "oc-message oc-message-assistant oc-streaming"
       });
-      this.streamMsgEl = el.createDiv({ cls: "advisecare-bubble" });
+      this.streamMsgEl = el.createDiv({ cls: "oc-bubble" });
     }
     this.streamBuffer += delta;
     if (this.streamMsgEl) {
@@ -434,7 +434,7 @@ var ChatView = class extends import_obsidian.ItemView {
     }
     this.streamBuffer = "";
     this.streamMsgEl = null;
-    (_b = (_a = this.messagesEl) == null ? void 0 : _a.querySelector(".advisecare-streaming")) == null ? void 0 : _b.removeClass("advisecare-streaming");
+    (_b = (_a = this.messagesEl) == null ? void 0 : _a.querySelector(".oc-streaming")) == null ? void 0 : _b.removeClass("oc-streaming");
   }
   addMessage(msg) {
     this.messages.push(msg);
@@ -492,7 +492,7 @@ var ChatView = class extends import_obsidian.ItemView {
 
 // src/settings.ts
 var import_obsidian2 = require("obsidian");
-var AdviseCareSettingTab = class extends import_obsidian2.PluginSettingTab {
+var OcChatSettingTab = class extends import_obsidian2.PluginSettingTab {
   constructor(app, plugin, gateway) {
     super(app, plugin);
     this.tokenField = null;
@@ -502,7 +502,7 @@ var AdviseCareSettingTab = class extends import_obsidian2.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "AdviseCare Agent Settings" });
+    containerEl.createEl("h2", { text: "OpenClaw Chat Settings" });
     new import_obsidian2.Setting(containerEl).setName("Gateway URL").setDesc("Your OpenClaw gateway URL. E.g. https://your-machine.your-tailnet.ts.net").addText(
       (text) => text.setPlaceholder("https://your-gateway.ts.net").setValue(this.plugin.settings.gatewayUrl).onChange(async (value) => {
         this.plugin.settings.gatewayUrl = value.replace(/\/+$/, "");
@@ -522,8 +522,8 @@ var AdviseCareSettingTab = class extends import_obsidian2.PluginSettingTab {
       });
     });
     new import_obsidian2.Setting(containerEl).setName("Agent Name").setDesc("Display name for your AI agent").addText(
-      (text) => text.setPlaceholder("Max").setValue(this.plugin.settings.agentName).onChange(async (value) => {
-        this.plugin.settings.agentName = value || "Max";
+      (text) => text.setPlaceholder("Agent").setValue(this.plugin.settings.agentName).onChange(async (value) => {
+        this.plugin.settings.agentName = value || "Agent";
         await this.plugin.saveSettings();
       })
     );
@@ -559,7 +559,7 @@ var AdviseCareSettingTab = class extends import_obsidian2.PluginSettingTab {
         }
       })
     );
-    const status = containerEl.createDiv({ cls: "advisecare-status" });
+    const status = containerEl.createDiv({ cls: "oc-status" });
     const connected = this.gateway.isConnected();
     status.setText(connected ? "\u25CF Connected to gateway" : "\u25CB Not connected");
     status.style.color = connected ? "var(--color-green)" : "var(--text-muted)";
@@ -571,12 +571,12 @@ var AdviseCareSettingTab = class extends import_obsidian2.PluginSettingTab {
 // src/types.ts
 var DEFAULT_SETTINGS = {
   gatewayUrl: "",
-  agentName: "Max",
+  agentName: "Agent",
   sessionKey: "obsidian:main"
 };
 
 // main.ts
-var AdviseCarePlugin = class extends import_obsidian3.Plugin {
+var OcChatPlugin = class extends import_obsidian3.Plugin {
   constructor() {
     super(...arguments);
     this.settings = { ...DEFAULT_SETTINGS };
@@ -587,23 +587,23 @@ var AdviseCarePlugin = class extends import_obsidian3.Plugin {
   async onload() {
     await this.loadSettings();
     this.registerView(CHAT_VIEW_TYPE, (leaf) => new ChatView(leaf, this, this.gateway));
-    this.addRibbonIcon("message-circle", "Open AdviseCare Chat", () => {
+    this.addRibbonIcon("message-circle", "Open OpenClaw Chat", () => {
       this.activateChatView();
     });
     this.addCommand({
-      id: "open-advisecare-chat",
-      name: "Open AdviseCare Chat",
+      id: "open-oc-chat",
+      name: "Open OpenClaw Chat",
       callback: () => this.activateChatView()
     });
-    this.addSettingTab(new AdviseCareSettingTab(this.app, this, this.gateway));
+    this.addSettingTab(new OcChatSettingTab(this.app, this, this.gateway));
     if (this.settings.gatewayUrl) {
       setTimeout(() => this.connectGateway(), 1e3);
     }
-    console.log("AdviseCare Agent loaded");
+    console.log("OpenClaw Chat loaded");
   }
   async onunload() {
     this.gateway.disconnect();
-    console.log("AdviseCare Agent unloaded");
+    console.log("OpenClaw Chat unloaded");
   }
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());

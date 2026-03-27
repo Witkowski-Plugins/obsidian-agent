@@ -1,12 +1,12 @@
-export interface AdviseCareSettings {
+export interface OcChatSettings {
   gatewayUrl: string;
   agentName: string;
   sessionKey: string;
 }
 
-export const DEFAULT_SETTINGS: AdviseCareSettings = {
+export const DEFAULT_SETTINGS: OcChatSettings = {
   gatewayUrl: "",
-  agentName: "Max",
+  agentName: "Agent",
   sessionKey: "obsidian:main",
 };
 

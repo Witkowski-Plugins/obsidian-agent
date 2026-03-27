@@ -1,12 +1,12 @@
 import { ItemView, WorkspaceLeaf, Notice } from "obsidian";
 import type { ChatMessage } from "./types";
 import type { GatewayClient } from "./gateway";
-import type AdviseCarePlugin from "../main";
+import type OcChatPlugin from "../main";
 
-export const CHAT_VIEW_TYPE = "advisecare-chat";
+export const CHAT_VIEW_TYPE = "oc-chat";
 
 export class ChatView extends ItemView {
-  private plugin: AdviseCarePlugin;
+  private plugin: OcChatPlugin;
   private gateway: GatewayClient;
   private messages: ChatMessage[] = [];
   private messagesEl: HTMLElement | null = null;
@@ -17,7 +17,7 @@ export class ChatView extends ItemView {
   private streamMsgEl: HTMLElement | null = null;
   private isStreaming: boolean = false;
 
-  constructor(leaf: WorkspaceLeaf, plugin: AdviseCarePlugin, gateway: GatewayClient) {
+  constructor(leaf: WorkspaceLeaf, plugin: OcChatPlugin, gateway: GatewayClient) {
     super(leaf);
     this.plugin = plugin;
     this.gateway = gateway;
@@ -28,7 +28,7 @@ export class ChatView extends ItemView {
   }
 
   getDisplayText(): string {
-    return `${this.plugin.settings.agentName} — AdviseCare`;
+    return `${this.plugin.settings.agentName} — OpenClaw`;
   }
 
   getIcon(): string {
@@ -38,27 +38,27 @@ export class ChatView extends ItemView {
   async onOpen(): Promise<void> {
     const container = this.containerEl.children[1] as HTMLElement;
     container.empty();
-    container.addClass("advisecare-chat-container");
+    container.addClass("oc-chat-container");
 
     // Header
-    const header = container.createDiv({ cls: "advisecare-header" });
+    const header = container.createDiv({ cls: "oc-header" });
     header.createEl("span", {
-      cls: "advisecare-header-title",
+      cls: "oc-header-title",
       text: this.plugin.settings.agentName,
     });
 
     const clearBtn = header.createEl("button", {
-      cls: "advisecare-clear-btn",
+      cls: "oc-clear-btn",
       text: "Clear",
     });
     clearBtn.addEventListener("click", () => this.clearMessages());
 
     // Status bar
-    this.statusEl = container.createDiv({ cls: "advisecare-status-bar" });
+    this.statusEl = container.createDiv({ cls: "oc-status-bar" });
     this.updateStatus();
 
     // Messages area
-    this.messagesEl = container.createDiv({ cls: "advisecare-messages" });
+    this.messagesEl = container.createDiv({ cls: "oc-messages" });
 
     // Render existing messages
     for (const msg of this.messages) {
@@ -72,9 +72,9 @@ export class ChatView extends ItemView {
     }
 
     // Input area
-    const inputArea = container.createDiv({ cls: "advisecare-input-area" });
+    const inputArea = container.createDiv({ cls: "oc-input-area" });
     this.inputEl = inputArea.createEl("textarea", {
-      cls: "advisecare-input",
+      cls: "oc-input",
       attr: { placeholder: `Message ${this.plugin.settings.agentName}…`, rows: "3" },
     });
 
@@ -86,7 +86,7 @@ export class ChatView extends ItemView {
     });
 
     this.sendBtn = inputArea.createEl("button", {
-      cls: "advisecare-send-btn",
+      cls: "oc-send-btn",
       text: "Send",
     });
     this.sendBtn.addEventListener("click", () => this.handleSend());
@@ -119,11 +119,11 @@ export class ChatView extends ItemView {
 
   private showTokenWarning(): void {
     if (!this.messagesEl) return;
-    const warn = this.messagesEl.createDiv({ cls: "advisecare-token-warning" });
-    warn.innerHTML = `⚠️ Gateway token not set. <a class="advisecare-settings-link">Open Settings</a> to enter your token.`;
-    warn.querySelector(".advisecare-settings-link")?.addEventListener("click", () => {
+    const warn = this.messagesEl.createDiv({ cls: "oc-token-warning" });
+    warn.innerHTML = `⚠️ Gateway token not set. <a class="oc-settings-link">Open Settings</a> to enter your token.`;
+    warn.querySelector(".oc-settings-link")?.addEventListener("click", () => {
       (this.app as unknown as { setting: { open: () => void; openTabById: (id: string) => void } }).setting.open();
-      (this.app as unknown as { setting: { open: () => void; openTabById: (id: string) => void } }).setting.openTabById("advisecare-agent");
+      (this.app as unknown as { setting: { open: () => void; openTabById: (id: string) => void } }).setting.openTabById("openclaw-chat");
     });
   }
 
@@ -131,15 +131,15 @@ export class ChatView extends ItemView {
     if (!this.statusEl) return;
     const connected = this.gateway.isConnected();
     this.statusEl.setText(connected ? "● Connected" : "○ Disconnected");
-    this.statusEl.className = `advisecare-status-bar ${connected ? "connected" : "disconnected"}`;
+    this.statusEl.className = `oc-status-bar ${connected ? "connected" : "disconnected"}`;
   }
 
   private renderMessage(msg: ChatMessage): void {
     if (!this.messagesEl) return;
     const el = this.messagesEl.createDiv({
-      cls: `advisecare-message advisecare-message-${msg.role}`,
+      cls: `oc-message oc-message-${msg.role}`,
     });
-    const bubble = el.createDiv({ cls: "advisecare-bubble" });
+    const bubble = el.createDiv({ cls: "oc-bubble" });
     bubble.setText(msg.content);
   }
 
@@ -149,9 +149,9 @@ export class ChatView extends ItemView {
       this.isStreaming = true;
       this.streamBuffer = "";
       const el = this.messagesEl.createDiv({
-        cls: "advisecare-message advisecare-message-assistant advisecare-streaming",
+        cls: "oc-message oc-message-assistant oc-streaming",
       });
-      this.streamMsgEl = el.createDiv({ cls: "advisecare-bubble" });
+      this.streamMsgEl = el.createDiv({ cls: "oc-bubble" });
     }
     this.streamBuffer += delta;
     if (this.streamMsgEl) {
@@ -173,7 +173,7 @@ export class ChatView extends ItemView {
     this.streamBuffer = "";
     this.streamMsgEl = null;
     // Remove streaming class
-    this.messagesEl?.querySelector(".advisecare-streaming")?.removeClass("advisecare-streaming");
+    this.messagesEl?.querySelector(".oc-streaming")?.removeClass("oc-streaming");
   }
 
   private addMessage(msg: ChatMessage): void {

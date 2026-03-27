@@ -1,7 +1,7 @@
 {
-  "name": "advisecare-agent",
+  "name": "openclaw-chat",
   "version": "1.0.0",
-  "description": "AdviseCare OpenClaw agent plugin for Obsidian",
+  "description": "OpenClaw chat plugin for Obsidian",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
