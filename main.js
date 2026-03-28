@@ -498,8 +498,11 @@ var ChatView = class extends import_obsidian.ItemView {
     var _a;
     const state = this.getAgentState(agentId);
     const agent = this.plugin.settings.agents.find((a) => a.id === agentId);
-    if (agent && payload.sessionKey && !payload.sessionKey.endsWith(agent.sessionKey)) {
-      return;
+    if (agent) {
+      const ourKey = agent.sessionKey || "obsidian:main";
+      if (!payload.sessionKey || !payload.sessionKey.includes(ourKey)) {
+        return;
+      }
     }
     if (payload.state === "final" && payload.message) {
       const text = payload.message.content.filter((c) => c.type === "text").map((c) => c.text).join("").trim();

@@ -241,8 +241,12 @@ export class ChatView extends ItemView {
 
     // Only process events for our session — ignore events from other sessions (Telegram, cron, etc.)
     const agent = this.plugin.settings.agents.find((a) => a.id === agentId);
-    if (agent && payload.sessionKey && !payload.sessionKey.endsWith(agent.sessionKey)) {
-      return;
+    if (agent) {
+      const ourKey = agent.sessionKey || "obsidian:main";
+      // Accept if sessionKey contains our key, reject everything else
+      if (!payload.sessionKey || !payload.sessionKey.includes(ourKey)) {
+        return;
+      }
     }
 
     // Filter out heartbeat responses
